@@ -1,0 +1,9 @@
+[submodule "lib/zstd"]
+	path = lib/zstd
+	url = https://github.com/facebook/zstd.git
+[submodule "lib/PicoSHA2"]
+	path = lib/PicoSHA2
+	url = https://github.com/okdshin/PicoSHA2.git
+[submodule "lib/lz4"]
+	path = lib/lz4
+	url = https://github.com/lz4/lz4.git
