@@ -470,6 +470,22 @@ auto main(std::int32_t argc, const char** argv) -> std::int32_t {
 
     bool found_note = false, found_dynsym = false, found_dynstr = false;
     const auto shdrs = std::span(reinterpret_cast<const Elf64_Shdr*>(file_data.data() + shdr_start), elf_hdr->e_shnum);
+
+    const auto string_table_index = elf_hdr->e_shstrndx;
+    if (string_table_index >= shdrs.size()) {
+        std::cerr << "Invalid section string table index\n";
+        return 1;
+    }
+
+    const auto& string_table_header = shdrs[string_table_index];
+    const auto string_table_start = string_table_header.sh_offset;
+    const auto string_table_end = string_table_start + string_table_header.sh_size;
+    if (string_table_end > file_data.size()) {
+        std::cerr << "Section string table data exceeds file bounds\n";
+        return 1;
+    }
+
+    const auto string_table = std::span(reinterpret_cast<const char*>(file_data.data() + string_table_start), string_table_header.sh_size);
     for (const auto& shdr : shdrs) {
         if (found_note && found_dynsym && found_dynstr) {
             break;
@@ -491,11 +507,19 @@ auto main(std::int32_t argc, const char** argv) -> std::int32_t {
                 }
                 break;
             }
-            case SHT_STRTAB: { // check string table to make sure this is .dynstr and not another string table
-                if (section_start >= ro_start && section_end <= ro_end) {
-                    header.dyn_str_offset = section_start - ro_start;
-                    header.dyn_str_size = section_end - section_start;
-                    found_dynstr = true;
+            case SHT_STRTAB: {
+                if (shdr.sh_name >= string_table.size()) {
+                    std::cerr << "Invalid section name offset\n";
+                    return 1;
+                }
+                const auto name = string_table.data() + shdr.sh_name;
+                const auto max_size = std::min(string_table.size() - shdr.sh_name, std::strlen(".dynstr"));
+                if (std::strncmp(name, ".dynstr", max_size) == 0) {
+                    if (section_start >= ro_start && section_end <= ro_end) {
+                        header.dyn_str_offset = section_start - ro_start;
+                        header.dyn_str_size = section_end - section_start;
+                        found_dynstr = true;
+                    }
                 }
                 break;
             }
