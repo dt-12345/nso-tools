@@ -1371,7 +1371,7 @@ auto ELFBuilder::splitBss(Context& ctx) -> void {
     // ZI
     if (ctx.nso.getBssSize() > 0) {
         auto& shdr = addSection(SHT_NOBITS, cSectionNames[SectionType_ZI]);
-        shdr.sh_flags = SHF_ALLOC | SHF_EXECINSTR;
+        shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
         shdr.sh_addr = ctx.nso.getBssOffset();
         shdr.sh_offset = mPhdrs[Section_Data].p_offset + mPhdrs[Section_Data].p_filesz;
         shdr.sh_size = ctx.nso.getBssSize();
