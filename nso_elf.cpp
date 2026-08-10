@@ -781,7 +781,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         }
 
         if (max_bucket >= hash_table->sym_offset) {
-            total_size += max_bucket * sizeof(std::uint32_t);
+            total_size += (max_bucket - hash_table->sym_offset) * sizeof(std::uint32_t);
 
             if (!ctx.nso.isInRodata(ctx.gnu_hash->d_un.d_ptr, total_size + sizeof(std::uint32_t))) {
                 Panic(".gnu.hash must be in .rodata");
