@@ -1276,11 +1276,14 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
             shdr.sh_info = 0;
             shdr.sh_addralign = alignof(void*);
             shdr.sh_entsize = sizeof(void*);
+
+            atexit_range.start = min_reloc;
+            atexit_range.size = max_reloc - min_reloc;
         }
     }
 
     // .data.rel.ro
-    {
+    if (ctx.rocrt_version == 1) {
         auto min_reloc = std::numeric_limits<std::size_t>::max();
         auto max_reloc = std::numeric_limits<std::size_t>::min();
         for (const auto& reloc : ctx.rel_relocs) {
@@ -1335,7 +1338,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
     }
 
     // .data.rela.ro
-    {
+    if (ctx.rocrt_version == 1) {
         auto min_reloc = std::numeric_limits<std::size_t>::max();
         auto max_reloc = std::numeric_limits<std::size_t>::min();
         for (const auto& reloc : ctx.rela_relocs) {
