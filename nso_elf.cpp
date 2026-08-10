@@ -442,6 +442,11 @@ auto ELFBuilder::splitText(Context& ctx) -> void {
 
     const auto rocrt_init = reinterpret_cast<const RocrtInit*>(section_data.data());
     ctx.rocrt_version = GetRocrtVersion(rocrt_init);
+    // catch libnx being goofy
+    if (std::memcmp(std::addressof(ctx.header->relro_start), cLibNXMagic, sizeof(cLibNXMagic)) == 0) {
+        ctx.rocrt_version = 0;
+        ctx.libnx_extension = reinterpret_cast<const LibNXExtension*>(std::addressof(ctx.header->relro_start));
+    }
     
     // EX
     const auto plt_begin = MatchPltResolver(section_data);
