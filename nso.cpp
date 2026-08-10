@@ -495,15 +495,17 @@ auto NSOFile::getModuleHeader(std::size_t* offset) const -> const ModuleHeader* 
     const auto& rodata = getRodata();
 
     const auto rocrt_init = getRocrtInit();
-    if (!isInRodata(rocrt_init->rocrt_info_offset, cMinimumModuleHeaderSize)) {
-        Panic(".rocrt.info must be in .rodata");
+    if (isInText(rocrt_init->rocrt_info_offset, cMinimumRocrtInitSize)) {
+        const auto text_offset = rocrt_init->rocrt_info_offset - getTextOffset();
+        *offset = rocrt_init->rocrt_info_offset;
+        return reinterpret_cast<const ModuleHeader*>(text.data() + text_offset);
+    } else if (isInRodata(rocrt_init->rocrt_info_offset, cMinimumModuleHeaderSize)) {
+        const auto rodata_offset = rocrt_init->rocrt_info_offset - getRodataOffset();
+        *offset = rocrt_init->rocrt_info_offset;
+        return reinterpret_cast<const ModuleHeader*>(rodata.data() + rodata_offset);
+    } else {
+        Panic(".rocrt.info must be in .text or .rodata");
     }
-
-    const auto rodata_offset = rocrt_init->rocrt_info_offset - getRodataOffset();
-    const auto module_header = reinterpret_cast<const ModuleHeader*>(rodata.data() + rodata_offset);
-
-    *offset = rocrt_init->rocrt_info_offset;
-    return module_header;
 }
 
 auto NSOFile::getDynamic() const -> std::span<const Elf64_Dyn> {
