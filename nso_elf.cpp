@@ -204,8 +204,7 @@ private:
         SectionType_FINI_ARRAY          , // parsed from .dynamic
         SectionType_TDATA               , // TODO: start/end can be found in the arguments for __nnmusl_init_dso, but that would be more involved to parse out
         SectionType_TBSS                , // TODO: start/end can be found in the arguments for __nnmusl_init_dso, but that would be more involved to parse out
-        SectionType_DATA_REL_RO         , // .rel.dyn relocations not in .init_array/.fini_array/.got/.got.plt/.atexit
-        SectionType_DATA_RELA_RO        , // .rela.dyn relocations not in .init_array/.fini_array/.got/.got.plt/.atexit
+        SectionType_DATA_REL_RO         , // relocations not in .init_array/.fini_array/.got/.got.plt/.atexit
         SectionType_DYNAMIC             , // parsed from module header
         SectionType_GOT                 , // between .dynamic and .got.plt on newer versions, between .got.plt and .init_array on older versions (verify against relocations)
         SectionType_GOT_PLT             , // parsed from .dynamic
@@ -244,7 +243,6 @@ private:
         ".tdata",
         ".tbss",
         ".data.rel.ro",
-        ".data.rela.ro",
         ".dynamic",
         ".got",
         ".got.plt",
@@ -1274,7 +1272,6 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
     }
 
     // .data.rel.ro
-    // .data.rela.ro
     if (ctx.rocrt_version == 1) {
         std::size_t max_allowed = 0;
         max_allowed = std::max(static_cast<std::size_t>(ia_range.start + ia_range.size), max_allowed);
@@ -1303,7 +1300,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
         }
 
         if (max_reloc > min_reloc) {
-            auto& shdr = addSection(SHT_PROGBITS, cSectionNames[ctx.rela && ctx.rela_size ? SectionType_DATA_RELA_RO : SectionType_DATA_REL_RO]);
+            auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_DATA_REL_RO]);
             shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
             shdr.sh_addr = min_reloc;
             shdr.sh_offset = start_offset + min_reloc - ctx.nso.getDataOffset();
