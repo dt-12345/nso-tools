@@ -393,6 +393,7 @@ static auto MatchAllPltEntries(std::span<const std::uint8_t> data) -> std::size_
             add x16, x16, :lo12:&(.got.plt[index])
             br x17
         this should extend until the end of the executable region (unless someone decided to do something funky with their linker script)
+            TODO: turns out some games do have code after .plt - is this another section or just weird ordering?
     */
 
     std::size_t offset = 0;
@@ -990,7 +991,23 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
     }
 
     // .api_info
-    if (exception_handling_end != 0 && exception_handling_end < build_id_range->start) {
+    if (build_id_range->size + build_id_range->start < ctx.nso.getRodataOffset() + section_data.size()) {
+        const auto start = build_id_range->size + build_id_range->start;
+        const auto size = ctx.nso.getRodataOffset() + section_data.size() - start;
+        if (!ctx.nso.isInRodata(exception_handling_end, size)) {
+            Panic(".api_info must be in .rodata");
+        }
+
+        auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_API_INFO]);
+        shdr.sh_flags = SHF_ALLOC | SHF_STRINGS;
+        shdr.sh_addr = start;
+        shdr.sh_offset = start_offset + start - ctx.nso.getRodataOffset();
+        shdr.sh_size = size;
+        shdr.sh_link = 0;
+        shdr.sh_info = 0;
+        shdr.sh_addralign = alignof(char);
+        shdr.sh_entsize = 0;
+    } else if (exception_handling_end != 0 && exception_handling_end < build_id_range->start) {
         const auto size = build_id_range->start - exception_handling_end;
         if (!ctx.nso.isInRodata(exception_handling_end, size)) {
             Panic(".api_info must be in .rodata");
