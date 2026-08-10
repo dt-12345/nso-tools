@@ -279,9 +279,6 @@ private:
         const Elf64_Dyn* fini_array_size;
         const Elf64_Dyn* got_plt;
         std::unordered_set<std::uint64_t> relocations{};
-        std::unordered_set<std::uint64_t> rel_relocs{};
-        std::unordered_set<std::uint64_t> rela_relocs{};
-        std::unordered_set<std::uint64_t> relr_relocs{};
         std::size_t plt_rel_index = SHN_UNDEF;
         std::size_t dyn_str_index = SHN_UNDEF;
         std::size_t min_rel_reloc = std::numeric_limits<std::size_t>::max();
@@ -526,6 +523,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
                 Panic(".rocrt.init must be in .text");
             }
 
+            ctx.rocrt_version = 0;
             if (ctx.nso.isInText(rocrt_init->rocrt_info_offset, cMinimumRocrtInitSize + sizeof(LibNXExtension))) {
                 const auto ext = reinterpret_cast<const LibNXExtension*>(section_data.data() + rocrt_init->rocrt_info_offset + cMinimumRocrtInitSize);
                 if (std::memcmp(ext->signature, cLibNXMagic, sizeof(cLibNXMagic)) == 0) {
@@ -607,7 +605,6 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         const auto count = ctx.rel_size->d_un.d_val / sizeof(Elf64_Rel);
         for (const auto& rel : std::span(reinterpret_cast<const Elf64_Rel*>(section_data.data() + rodata_offset), count)) {
             ctx.relocations.insert(rel.r_offset);
-            ctx.rel_relocs.insert(rel.r_offset);
         }
     }
 
@@ -633,7 +630,6 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         const auto count = ctx.rela_size->d_un.d_val / sizeof(Elf64_Rela);
         for (const auto& rel : std::span(reinterpret_cast<const Elf64_Rela*>(section_data.data() + rodata_offset), count)) {
             ctx.relocations.insert(rel.r_offset);
-            ctx.rela_relocs.insert(rel.r_offset);
         }
     }
 
@@ -714,13 +710,11 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         for (auto rel : std::span(reinterpret_cast<const Elf64_Relr*>(section_data.data() + rodata_offset), count)) {
             if ((rel & 1) == 0) {
                 ctx.relocations.insert(rel);
-                ctx.relr_relocs.insert(rel);
                 target = rel + sizeof(void*);
             } else {
                 for (std::size_t i = 0; (rel >>= 1) != 0; ++i) {
                     if (rel & 1) {
                         ctx.relocations.insert(target + i * sizeof(void*));
-                        ctx.relr_relocs.insert(target + i * sizeof(void*));
                     }
                 }
                 target += (sizeof(Elf64_Relr) * CHAR_BIT - 1) * sizeof(void*);
@@ -1036,6 +1030,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
 
     if (unofficial_ro_layout) {
         std::cerr << "[WARNING] Unofficial .rodata layout detected\n";
+        // TODO: how do we fill out RO for these NSOs? (we could just leave it out)
         // auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_RO]);
         // shdr.sh_flags = SHF_ALLOC | SHF_MERGE | SHF_STRINGS;
         // shdr.sh_addr = ctx.nso.getRodataOffset();
@@ -1247,7 +1242,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
     Range atexit_range{};
 
     // .atexit
-    {
+    if (ctx.rocrt_version == 0) {
         auto min_allowed = std::numeric_limits<std::size_t>::min();
         // we don't bother to check if the sections exists bc if they don't, the range is zero anyways
         min_allowed = std::max(static_cast<std::size_t>(ia_range.start + ia_range.size), min_allowed);
@@ -1283,66 +1278,17 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
     }
 
     // .data.rel.ro
-    if (ctx.rocrt_version == 1) {
-        auto min_reloc = std::numeric_limits<std::size_t>::max();
-        auto max_reloc = std::numeric_limits<std::size_t>::min();
-        for (const auto& reloc : ctx.rel_relocs) {
-            if (reloc == 0) {
-                continue;
-            }
-
-            // we don't bother to check if the sections exists bc if they don't, the range is zero anyways
-            if (ia_range.contains(reloc) ||
-                fa_range.contains(reloc) ||
-                got_plt_range.contains(reloc) ||
-                got_range.contains(reloc) ||
-                atexit_range.contains(reloc)
-            ) {
-                continue;
-            }
-
-            min_reloc = std::min(reloc, min_reloc);
-            max_reloc = std::max(reloc + sizeof(void*), max_reloc);
-        }
-
-        for (const auto& reloc : ctx.relr_relocs) {
-            if (reloc == 0) {
-                continue;
-            }
-
-            // we don't bother to check if the sections exists bc if they don't, the range is zero anyways
-            if (ia_range.contains(reloc) ||
-                fa_range.contains(reloc) ||
-                got_plt_range.contains(reloc) ||
-                got_range.contains(reloc) ||
-                atexit_range.contains(reloc)
-            ) {
-                continue;
-            }
-
-            min_reloc = std::min(reloc, min_reloc);
-            max_reloc = std::max(reloc + sizeof(void*), max_reloc);
-        }
-
-        if (max_reloc > min_reloc) {
-            auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_DATA_REL_RO]);
-            shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
-            shdr.sh_addr = min_reloc;
-            shdr.sh_offset = start_offset + min_reloc - ctx.nso.getDataOffset();
-            shdr.sh_size = max_reloc - min_reloc;
-            shdr.sh_link = 0;
-            shdr.sh_info = 0;
-            shdr.sh_addralign = alignof(void*);
-            shdr.sh_entsize = 0;
-        }
-    }
-
     // .data.rela.ro
     if (ctx.rocrt_version == 1) {
+        std::size_t max_allowed = 0;
+        max_allowed = std::max(static_cast<std::size_t>(ia_range.start + ia_range.size), max_allowed);
+        max_allowed = std::max(static_cast<std::size_t>(fa_range.start + fa_range.size), max_allowed);
+        max_allowed = std::max(static_cast<std::size_t>(got_plt_range.start + got_plt_range.size), max_allowed);
+        max_allowed = std::max(static_cast<std::size_t>(got_range.start + got_range.size), max_allowed);
         auto min_reloc = std::numeric_limits<std::size_t>::max();
         auto max_reloc = std::numeric_limits<std::size_t>::min();
-        for (const auto& reloc : ctx.rela_relocs) {
-            if (reloc == 0) {
+        for (const auto& reloc : ctx.relocations) {
+            if (reloc == 0 || reloc >= max_allowed) {
                 continue;
             }
 
@@ -1361,7 +1307,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
         }
 
         if (max_reloc > min_reloc) {
-            auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_DATA_RELA_RO]);
+            auto& shdr = addSection(SHT_PROGBITS, cSectionNames[ctx.rela && ctx.rela_size ? SectionType_DATA_RELA_RO : SectionType_DATA_REL_RO]);
             shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
             shdr.sh_addr = min_reloc;
             shdr.sh_offset = start_offset + min_reloc - ctx.nso.getDataOffset();
