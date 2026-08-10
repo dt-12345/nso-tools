@@ -13,6 +13,12 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
     add_compile_options(-fcolor-diagnostics)
 endif()
 
+if (MSVC)
+    set(WARNING_FLAGS /W4 /wd4244 /wd4127)
+else()
+    set(WARNING_FLAGS -Wall -Wextra -Werror)
+endif()
+
 set(LZ4_BUILD_CLI OFF CACHE INTERNAL "" FORCE)
 set(ZSTD_BUILD_PROGRAMS OFF CACHE INTERNAL "" FORCE)
 set(ZSTD_BUILD_SHARED OFF CACHE INTERNAL "" FORCE)
@@ -33,3 +39,7 @@ target_link_libraries(nso2elf PRIVATE nso)
 
 add_executable(nso2nso nso2nso.cpp)
 target_link_libraries(nso2nso PRIVATE nso)
+
+target_compile_options(elf2nso PRIVATE ${WARNING_FLAGS})
+target_compile_options(nso2elf PRIVATE ${WARNING_FLAGS})
+target_compile_options(nso2nso PRIVATE ${WARNING_FLAGS})
