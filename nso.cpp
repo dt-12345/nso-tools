@@ -694,9 +694,9 @@ auto NSOFile::findModuleIdRange() const -> std::optional<Range> {
     if (GetRocrtVersion(getRocrtInit()) == 0) {
         const auto& rodata = getRodata();
 
-        std::size_t current_offset = rodata.size() > 0x2000 ? rodata.size() - 0x2000 : 0;
+        std::size_t current_offset = (rodata.size() > 0x2000 ? rodata.size() - 0x2000 : 0) / alignof(Elf64_Nhdr) * alignof(Elf64_Nhdr);
 
-        while (current_offset + 4 < rodata.size()) {
+        while (current_offset + sizeof(cGNUNoteMagic) < rodata.size()) {
             if (std::memcmp(rodata.data() + current_offset, cGNUNoteMagic, sizeof(cGNUNoteMagic)) == 0) {
                 const auto note_header_end = rodata.data() + current_offset;
                 if (current_offset >= sizeof(Elf64_Nhdr)) {
@@ -711,7 +711,7 @@ auto NSOFile::findModuleIdRange() const -> std::optional<Range> {
                     }
                 }
             }
-            current_offset += 4;
+            current_offset += sizeof(cGNUNoteMagic);
         }
 
         return std::nullopt;
