@@ -8,9 +8,9 @@
 auto main(std::int32_t argc, const char** argv) -> std::int32_t {
     constexpr auto print_usage = []() -> void {
         std::cout
-            << "elf2nso\n"
+            << "nso2nso\n"
             << "  Usage:\n"
-            << "    elf2nso <options> path_to_elf\n"
+            << "    nso2nso <options> path_to_nso\n"
             << "\n"
             << "  Basic Options\n"
             << "    --help, -h              print help message\n"
@@ -25,7 +25,9 @@ auto main(std::int32_t argc, const char** argv) -> std::int32_t {
             << "    --verify-text           verify .text section hash when loading (default)\n"
             << "    --verify-ro             verify .rodata section hash when loading (default)\n"
             << "    --verify-data           verify .data section hash when loading (default)\n"
-            << "    --verify, -v            verify all section hashes when loading (default)\n";
+            << "    --verify, -v            verify all section hashes when loading (default)\n"
+            << "  Load Options\n"
+            << "    --no-hash-validation    don't validate SHA-256 hashes when loading\n";
     };
 
     if (argc < 2) {
@@ -46,6 +48,7 @@ auto main(std::int32_t argc, const char** argv) -> std::int32_t {
     bool no_verify_data = false;
     bool execute_only = false;
     bool use_zstd_for_text = false;
+    bool no_validate = false;
     for (std::size_t i = 0; i < args.size(); ++i) {
         const auto arg = std::string_view(args[i]);
         if (arg.empty()) {
@@ -108,6 +111,8 @@ auto main(std::int32_t argc, const char** argv) -> std::int32_t {
             } else if (name == "help") {
                 print_usage();
                 return 0;
+            } else if (name == "no-hash-validation") {
+                no_validate = true;
             } else {
                 std::cerr << "[WARNING] Ignoring unknown argument " << arg << "\n";
             }
@@ -142,7 +147,7 @@ auto main(std::int32_t argc, const char** argv) -> std::int32_t {
     }
 
     NSOFile()
-        .loadELF(path)
+        .loadNSO(path, no_validate)
         .unsetFlag(TextCompress, no_compress_text)
         .unsetFlag(RoCompress, no_compress_ro)
         .unsetFlag(DataCompress, no_compress_data)

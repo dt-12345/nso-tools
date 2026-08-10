@@ -21,7 +21,15 @@ set(ZSTD_BUILD_STATIC ON CACHE INTERNAL "" FORCE)
 add_subdirectory(lib/lz4/build/cmake/)
 add_subdirectory(lib/zstd/build/cmake/)
 
-add_executable(elf2nso elf2nso.cpp)
+add_library(nso STATIC nso.cpp nso_elf.cpp)
+target_link_libraries(nso PRIVATE lz4 libzstd)
+target_include_directories(nso PRIVATE lib/lz4/lib/ lib/zstd/lib/ lib/PicoSHA2/)
 
-target_link_libraries(elf2nso PRIVATE lz4 libzstd)
-target_include_directories(elf2nso PRIVATE lib/lz4/lib/ lib/zstd/lib/ lib/PicoSHA2/)
+add_executable(elf2nso elf2nso.cpp)
+target_link_libraries(elf2nso PRIVATE nso)
+
+add_executable(nso2elf nso2elf.cpp)
+target_link_libraries(nso2elf PRIVATE nso)
+
+add_executable(nso2nso nso2nso.cpp)
+target_link_libraries(nso2nso PRIVATE nso)
