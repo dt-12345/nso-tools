@@ -281,10 +281,6 @@ private:
         std::unordered_set<std::uint64_t> relocations{};
         std::size_t plt_rel_index = SHN_UNDEF;
         std::size_t dyn_str_index = SHN_UNDEF;
-        std::size_t min_rel_reloc = std::numeric_limits<std::size_t>::max();
-        std::size_t max_rel_reloc = std::numeric_limits<std::size_t>::min();
-        std::size_t min_rela_reloc = std::numeric_limits<std::size_t>::max();
-        std::size_t max_rela_reloc = std::numeric_limits<std::size_t>::min();
         std::size_t max_plt_reloc = std::numeric_limits<std::size_t>::min();
     };
 
