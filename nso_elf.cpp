@@ -26,11 +26,17 @@ enum Encoding : std::uint8_t {
 
     DW_EH_PE_absptr     = 0x00,
     DW_EH_PE_pcrel      = 0x10,
+    DW_EH_PE_textrel    = 0x20, // unsupported
     DW_EH_PE_datarel    = 0x30,
+    DW_EH_PE_funcrel    = 0x40, // unsupported
+    DW_EH_PE_aligned    = 0x50, // unsupported
+
+    DW_EH_PE_indirect   = 0x80,
 
     DW_EH_PE_omit       = 0xff,
 
     TypeMask            = 0x0f,
+    SizeMask            = 0x07,
     IsSignedMask        = 0x08,
     ApplyTypeMask       = 0xf0,
 };
@@ -41,6 +47,39 @@ struct EhFrameHdr {
     Encoding fde_count_enc;
     Encoding table_enc;
 };
+
+static auto GetLEB128Size(std::span<const std::uint8_t> data) -> std::size_t {
+    std::size_t offset = 0;
+    std::uint8_t byte;
+    do {
+        if (offset + sizeof(std::uint8_t) > data.size()) {
+            Panic("ReadLEB128 ran out of input");
+        }
+
+        byte = data[offset++];
+    } while ((byte & 0x80) != 0);
+
+    return offset;
+}
+
+static auto GetSize(Encoding enc, std::span<const std::uint8_t> data) -> std::size_t {
+    if (enc == DW_EH_PE_omit) {
+        return 0;
+    }
+
+    switch (enc & SizeMask) {
+        case 1:
+            return GetLEB128Size(data);
+        case 2:
+            return 2;
+        case 3:
+            return 4;
+        case 4:
+            return 8;
+        default:
+            Panic("Invalid encoding");
+    }
+}
 
 template <bool SIGNED>
 static auto ReadLEB128(std::span<const std::uint8_t> data) -> decltype(auto) {
@@ -56,7 +95,7 @@ static auto ReadLEB128(std::span<const std::uint8_t> data) -> decltype(auto) {
             Panic("ReadLEB128 ran out of input");
         }
 
-        byte = data[offset];
+        byte = data[offset++];
         result |= (byte & 0x7f) << shift;
         shift += 7;
     } while ((byte & 0x80) != 0);
@@ -193,10 +232,10 @@ private:
         SectionType_GNU_HASH            , // parsed from .dynamic
         SectionType_DYN_SYM             , // parsed from .dynamic
         SectionType_DYN_STR             , // parsed from .dynamic
-        SectionType_RO                  , // between .dynstr and .eh_frame_hdr
-        SectionType_GCC_EXCEPT_TABLE    , // TODO: (do any games actually have this?)
+        SectionType_RO                  , // between .dynstr and .gcc_except_table/.eh_frame_hdr
+        SectionType_GCC_EXCEPT_TABLE    , // parse from .eh_frame
         SectionType_EH_FRAME_HDR        , // parsed from module header
-        SectionType_EH_FRAME            , // parsed from eh_frame_hdr
+        SectionType_EH_FRAME            , // parsed from .eh_frame_hdr
         SectionType_API_INFO            , // region between .eh_frame and .note.gnu.build-id
         SectionType_GNU_BUILDID         , // parsed from module header in newer versions, searched for in older versions (nnSdk searches the last 0x2000 bytes of .rodata)
         // .data
@@ -423,6 +462,234 @@ static auto MatchAllPltEntries(std::span<const std::uint8_t> data) -> std::size_
     }
 
     return offset;
+}
+
+static auto ReadEhFrame(
+    const NSOFile& nso,
+    std::span<const std::uint8_t> data,
+    std::size_t eh_frame_hdr_start,
+    std::size_t eh_frame_start,
+    std::optional<Range>& lsda_range
+) -> std::size_t {
+    auto current_eh_frame_offset = eh_frame_start;
+    auto min_lsda = std::numeric_limits<std::size_t>::max();
+    auto max_lsda = std::numeric_limits<std::size_t>::min();
+    bool has_lsda = false;
+    Encoding lsda_encoding = DW_EH_PE_omit;
+    Encoding ptr_encoding = DW_EH_PE_omit;
+    while (true) {
+        if (!nso.isInRodata(current_eh_frame_offset, sizeof(std::uint32_t))) {
+            Panic("End of .rodata reached before a terminator was found");
+        }
+
+        std::uint64_t length = *reinterpret_cast<const std::uint32_t*>(data.data() + current_eh_frame_offset - nso.getRodataOffset());
+        current_eh_frame_offset += sizeof(std::uint32_t);
+        if (length == 0) {
+            break;
+        } else if (length == 0xffff'ffff) {
+            if (!nso.isInRodata(current_eh_frame_offset, sizeof(std::uint64_t))) {
+                Panic("End of .rodata reached before a terminator was found ", std::hex, current_eh_frame_offset);
+            }
+
+            length = *reinterpret_cast<const std::uint64_t*>(data.data() + current_eh_frame_offset - nso.getRodataOffset());
+            current_eh_frame_offset += sizeof(std::uint64_t);
+        }
+
+        if (!nso.isInRodata(current_eh_frame_offset, length)) {
+            Panic(".eh_frame entry extends past end of .rodata");
+        }
+
+        if (length < sizeof(std::uint32_t)) {
+            Panic(".eh_frame entry is too small to be valid");
+        }
+
+        const auto id = *reinterpret_cast<const std::uint32_t*>(data.data() + current_eh_frame_offset - nso.getRodataOffset());
+        if (id == 0) {
+            // CIE
+            if (length < sizeof(std::uint32_t) + sizeof(std::uint8_t)) {
+                Panic(".eh_frame CIE is too small to be valid");
+            }
+
+            const auto version_offset = current_eh_frame_offset + sizeof(std::uint32_t);
+            if (*reinterpret_cast<const std::uint8_t*>(data.data() + version_offset - nso.getRodataOffset()) != 1) {
+                Panic("Invalid CIE version");
+            }
+
+            auto aug_str_offset = version_offset + sizeof(std::uint8_t);
+            std::size_t aug_str_length = 0;
+            std::string aug_str = "";
+            while (true) {
+                if (!nso.isInRodata(aug_str_offset, sizeof(char))) {
+                    Panic(".eh_frame CIE augmentation string was not null-terminated before the end of .rodata");
+                }
+
+                const auto c = *reinterpret_cast<const std::uint8_t*>(data.data() + aug_str_offset++ - nso.getRodataOffset());
+                if (c == '\0') {
+                    break;
+                }
+
+                aug_str += c;
+            }
+            
+            has_lsda = false; lsda_encoding = DW_EH_PE_omit; ptr_encoding = DW_EH_PE_omit;
+            if (aug_str.starts_with('z')) {
+                auto current_offset = aug_str_offset;
+                if (aug_str.find("eh") != std::string::npos) { // skip EH data
+                    current_offset += 8;
+                }
+                current_offset += GetLEB128Size(std::span(data).subspan(current_offset - nso.getRodataOffset())); // code alignment factor
+                current_offset += GetLEB128Size(std::span(data).subspan(current_offset - nso.getRodataOffset())); // data alignment factor
+                current_offset += sizeof(std::uint8_t); // return address register
+
+                const auto aug_size = ReadLEB128<false>(std::span(data).subspan(current_offset - nso.getRodataOffset()));
+                current_offset += GetLEB128Size(std::span(data).subspan(current_offset - nso.getRodataOffset()));
+
+                if (!nso.isInRodata(current_offset, aug_size)) {
+                    Panic(".eh_frame CIE augmentation data does not fit in .rodata ", std::hex, current_offset, " ", aug_size, " ", aug_str);
+                }
+
+                std::size_t aug_data_offset = 0;
+                for (const auto c : aug_str.substr(1)) {
+                    switch (c) {
+                        case 'P': {
+                            if (aug_data_offset + sizeof(Encoding) > aug_size) {
+                                Panic(".eh_frame CIE augmentation data is too small");
+                            }
+
+                            const auto offset = current_offset + aug_data_offset;
+                            const auto personality_encoding = *reinterpret_cast<const Encoding*>(data.data() + offset - nso.getRodataOffset());
+                            aug_data_offset += sizeof(Encoding);
+                            aug_data_offset += GetSize(personality_encoding, std::span(data).subspan(offset + sizeof(Encoding) - nso.getRodataOffset()));
+                            break;
+                        }
+                        case 'L': {
+                            if (aug_data_offset + sizeof(Encoding) > aug_size) {
+                                Panic(".eh_frame CIE augmentation data is too small");
+                            }
+
+                            has_lsda = true;
+                            lsda_encoding = *reinterpret_cast<const Encoding*>(data.data() + current_offset + aug_data_offset - nso.getRodataOffset());
+                            aug_data_offset += sizeof(Encoding);
+                            break;
+                        }
+                        case 'R': {
+                            if (aug_data_offset + sizeof(Encoding) > aug_size) {
+                                Panic(".eh_frame CIE augmentation data is too small");
+                            }
+
+                            ptr_encoding = *reinterpret_cast<const Encoding*>(data.data() + current_offset + aug_data_offset - nso.getRodataOffset());
+                            aug_data_offset += sizeof(Encoding);
+                            break;
+                        }
+                        default:
+                            Panic("Invalid CIE augmentation string ", aug_str);
+                    }
+                }
+            }
+        } else {
+            // FDE
+            if (has_lsda) {
+                auto fde_offset = current_eh_frame_offset + sizeof(std::uint32_t);
+                fde_offset += GetSize(ptr_encoding, std::span(data).subspan(fde_offset - nso.getRodataOffset())); // PC begin
+                fde_offset += GetSize(ptr_encoding, std::span(data).subspan(fde_offset - nso.getRodataOffset())); // PC range
+
+                const auto aug_size = ReadLEB128<false>(std::span(data).subspan(fde_offset - nso.getRodataOffset()));
+                fde_offset += GetLEB128Size(std::span(data).subspan(fde_offset - nso.getRodataOffset()));
+
+                if (!nso.isInRodata(fde_offset, aug_size)) {
+                    Panic(".eh_frame FDE augmentation data does not fit in .rodata");
+                }
+
+                std::size_t lsda_offset;
+                switch (lsda_encoding & ApplyTypeMask) {
+                    case DW_EH_PE_absptr: lsda_offset = 0; break;
+                    case DW_EH_PE_pcrel: lsda_offset = fde_offset; break;
+                    case DW_EH_PE_datarel: lsda_offset = eh_frame_hdr_start; break;
+                    default: Panic("Invalid pointer apply type");
+                }
+
+                const auto lsda_ptr_data = std::span(data).subspan(fde_offset - nso.getRodataOffset());
+                if (lsda_encoding & IsSignedMask) {
+                    lsda_offset = static_cast<std::size_t>(static_cast<std::int64_t>(lsda_offset) + ReadSigned(lsda_encoding, lsda_ptr_data));
+                } else {
+                    lsda_offset += ReadUnsigned(lsda_encoding, lsda_ptr_data);
+                }
+
+                min_lsda = std::min(lsda_offset, min_lsda);
+                max_lsda = std::max(lsda_offset, max_lsda);
+            }
+        }
+
+        current_eh_frame_offset += length;
+    }
+
+    if (min_lsda != std::numeric_limits<std::size_t>::max() && max_lsda != std::numeric_limits<std::size_t>::min()) {
+        if (!nso.isInRodata(min_lsda) || !nso.isInRodata(max_lsda)) {
+            Panic("Language-specific data area must be in .rodata");
+        }
+
+        auto offset = max_lsda;
+        if (!nso.isInRodata(offset, sizeof(Encoding))) {
+            Panic("Language-specific data area does not fit in .rodata");
+        }
+
+        const auto region_begin_encoding = *reinterpret_cast<const Encoding*>(data.data() + offset - nso.getRodataOffset());
+        offset += sizeof(Encoding);
+        if (region_begin_encoding != DW_EH_PE_omit) {
+            offset += GetSize(region_begin_encoding, std::span(data).subspan(offset - nso.getRodataOffset()));
+        }
+
+        if (!nso.isInRodata(offset, sizeof(Encoding))) {
+            Panic("Language-specific data area does not fit in .rodata");
+        }
+
+        const auto type_table_encoding = *reinterpret_cast<const Encoding*>(data.data() + offset - nso.getRodataOffset());
+        offset += sizeof(Encoding);
+        std::size_t type_table_offset = 0;
+        if (type_table_encoding != DW_EH_PE_omit) {
+            // if we have a type table, then it must come last (the type table offset is to the end of the type table)
+            offset += ReadLEB128<false>(std::span(data).subspan(offset - nso.getRodataOffset()));
+            offset += GetLEB128Size(std::span(data).subspan(offset - nso.getRodataOffset())); // this offset is relative to the end of this offset
+        } else {
+            if (!nso.isInRodata(offset, sizeof(Encoding))) {
+                Panic("Language-specific data are does not fit in .rodata");
+            }
+            const auto call_site_encoding = *reinterpret_cast<const Encoding*>(data.data() + offset - nso.getRodataOffset());
+            offset += sizeof(Encoding);
+
+            const auto call_site_table_size = ReadLEB128<false>(std::span(data).subspan(offset - nso.getRodataOffset()));
+            offset += GetLEB128Size(std::span(data).subspan(offset - nso.getRodataOffset()));
+    
+            // see if we have any actions to handle
+            std::size_t max_action = 0;
+            for (auto table_offset = offset; table_offset < offset + call_site_table_size; /* ... */) {
+                table_offset += GetSize(call_site_encoding, std::span(data).subspan(table_offset - nso.getRodataOffset())); // pos
+                table_offset += GetSize(call_site_encoding, std::span(data).subspan(table_offset - nso.getRodataOffset())); // range
+                table_offset += GetSize(call_site_encoding, std::span(data).subspan(table_offset - nso.getRodataOffset())); // landing pad
+                const auto action = ReadLEB128<false>(std::span(data).subspan(table_offset - nso.getRodataOffset()));
+                table_offset += GetLEB128Size(std::span(data).subspan(table_offset - nso.getRodataOffset()));
+                if (action != 0) { // not cleanup
+                    max_action = std::max(action - 1, max_action);
+                }
+            }
+
+            offset += call_site_table_size;
+
+            if (max_action != 0) {
+                offset += max_action;
+                offset += GetLEB128Size(std::span(data).subspan(offset - nso.getRodataOffset())); // filter
+                const auto next_offset = ReadLEB128<false>(std::span(data).subspan(offset - nso.getRodataOffset()));
+                offset += GetLEB128Size(std::span(data).subspan(offset - nso.getRodataOffset()));
+                offset += next_offset;
+            }
+        }
+
+        lsda_range.emplace();
+        lsda_range->start = static_cast<std::uint32_t>(min_lsda);
+        lsda_range->size = static_cast<std::uint32_t>(offset - min_lsda);
+    }
+
+    return current_eh_frame_offset - eh_frame_start;;
 }
 
 auto ELFBuilder::splitText(Context& ctx) -> void {
@@ -874,27 +1141,6 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         max_offset = std::max(shdr.sh_addr + shdr.sh_size, max_offset);
     }
 
-    // RO
-    bool unofficial_ro_layout;
-    if (max_offset < eh_frame_hdr_start && ctx.nso.isInRodata(max_offset)) {
-        const auto ro_size = eh_frame_hdr_start - max_offset;
-        
-        auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_RO]);
-        shdr.sh_flags = SHF_ALLOC | SHF_MERGE | SHF_STRINGS;
-        shdr.sh_addr = max_offset;
-        shdr.sh_offset = start_offset + max_offset - ctx.nso.getRodataOffset();
-        shdr.sh_size = ro_size;
-        shdr.sh_link = 0;
-        shdr.sh_info = 0;
-        shdr.sh_addralign = 1 << 2;
-        shdr.sh_entsize = 0;
-
-        unofficial_ro_layout = false;
-    } else {
-        // unfortunately, a lot of unofficial NSOs do not place .rodata directly before .eh_frame_hdr
-        unofficial_ro_layout = true;
-    }
-
     auto exception_handling_end = std::size_t(0);
     auto eh_frame_offset = std::numeric_limits<std::size_t>::max();
 
@@ -939,35 +1185,15 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         }
     }
 
+    auto lsda_range = std::optional<Range>{};
+
     // .eh_frame
     if (eh_frame_offset != std::numeric_limits<std::size_t>::max()) {
         if (!ctx.nso.isInRodata(eh_frame_offset)) {
             Panic(".eh_frame must be in .rodata");
         }
 
-        auto current_offset = eh_frame_offset;
-        while (true) {
-            if (!ctx.nso.isInRodata(current_offset, sizeof(std::uint32_t))) {
-                Panic("End of .rodata reached before a terminator was found");
-            }
-
-            std::uint64_t length = *reinterpret_cast<const std::uint32_t*>(section_data.data() + current_offset - ctx.nso.getRodataOffset());
-            current_offset += sizeof(std::uint32_t);
-            if (length == 0) {
-                break;
-            } else if (length == 0xffff'ffff) {
-                if (!ctx.nso.isInRodata(current_offset, sizeof(std::uint64_t))) {
-                    Panic("End of .rodata reached before a terminator was found");
-                }
-
-                length = *reinterpret_cast<const std::uint64_t*>(section_data.data() + current_offset - ctx.nso.getRodataOffset());
-                current_offset += sizeof(std::uint64_t);
-            }
-
-            current_offset += length;
-        }
-
-        const auto frame_size = current_offset - eh_frame_offset;
+        const auto frame_size = ReadEhFrame(ctx.nso, section_data, eh_frame_hdr_start, eh_frame_offset, lsda_range);
         if (!ctx.nso.isInRodata(eh_frame_offset, frame_size)) {
             Panic(".eh_frame must be in .rodata");
         }
@@ -983,6 +1209,45 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         shdr.sh_info = 0;
         shdr.sh_addralign = 1 << 3;
         shdr.sh_entsize = 0;
+    }
+
+    // .gcc_except_table
+    if (lsda_range) {
+        if (!ctx.nso.isInRodata(lsda_range->start, lsda_range->size)) {
+            Panic(".gcc_except_table must be .rodata");
+        }
+
+        auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_GCC_EXCEPT_TABLE]);
+        shdr.sh_flags = SHF_ALLOC;
+        shdr.sh_addr = lsda_range->start;
+        shdr.sh_offset = start_offset + lsda_range->start - ctx.nso.getRodataOffset();
+        shdr.sh_size = lsda_range->size;
+        shdr.sh_link = 0;
+        shdr.sh_info = 0;
+        shdr.sh_addralign = 1 << 3;
+        shdr.sh_entsize = 0;
+    }
+
+    // RO
+    bool unofficial_ro_layout;
+    const auto ro_end = lsda_range ? lsda_range->start : eh_frame_hdr_start;
+    if (max_offset < ro_end && ctx.nso.isInRodata(max_offset)) {
+        const auto ro_size = ro_end - max_offset;
+        
+        auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_RO]);
+        shdr.sh_flags = SHF_ALLOC | SHF_MERGE | SHF_STRINGS;
+        shdr.sh_addr = max_offset;
+        shdr.sh_offset = start_offset + max_offset - ctx.nso.getRodataOffset();
+        shdr.sh_size = ro_size;
+        shdr.sh_link = 0;
+        shdr.sh_info = 0;
+        shdr.sh_addralign = 1 << 2;
+        shdr.sh_entsize = 0;
+
+        unofficial_ro_layout = false;
+    } else {
+        // unfortunately, a lot of unofficial NSOs do not place .rodata directly before .eh_frame_hdr
+        unofficial_ro_layout = true;
     }
 
     const auto build_id_range = ctx.nso.findModuleIdRange();
