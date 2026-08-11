@@ -1451,6 +1451,13 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
         const auto got_start = ctx.got_plt ? got_plt_range.start + got_plt_range.size : dynamic_range.start + dynamic_range.size;
         auto got_end = got_start;
 
+        if (ctx.nso.isInData(got_end, sizeof(void*))) {
+            const auto value = *reinterpret_cast<const std::uint64_t*>(ctx.nso.getData().data() + got_end - ctx.nso.getDataOffset());
+            if (value == dynamic_range.start) {
+                got_end += sizeof(void*); 
+            }
+        }
+
         if (ctx.init_array && ctx.init_array_size) {
             while (ctx.relocations.contains(got_end) && got_end < ia_range.start && ctx.nso.isInData(got_end)) {
                 got_end += sizeof(void*);
