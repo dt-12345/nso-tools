@@ -1498,6 +1498,14 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
             }
         } else {
             got_end = got_start;
+
+            if (ctx.nso.isInData(got_end, sizeof(void*))) {
+                const auto value = *reinterpret_cast<const std::uint64_t*>(ctx.nso.getData().data() + got_end - ctx.nso.getDataOffset());
+                if (value == dynamic_range.start) {
+                    got_end += sizeof(void*); 
+                }
+            }
+
             // search until we reach the end of valid relocations
             // this should be fine since newer versions no longer have .atexit afaict
             while (ctx.relocations.contains(got_end) && ctx.nso.isInData(got_end)) {
