@@ -35,6 +35,10 @@ auto main(std::int32_t argc, const char** argv) -> std::int32_t {
     }
 
     const auto path = std::string(argv[argc - 1]);
+    if (path == "--help" || path == "-h") {
+        print_usage();
+        return 0;
+    }
 
     const auto args = std::span(argv + 1, argc - 2);
     std::string outpath = "";
