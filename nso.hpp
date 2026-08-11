@@ -146,10 +146,6 @@ public:
         return *this;
     }
 
-    [[nodiscard]] auto getName() const -> std::string_view {
-        return mName;
-    }
-
     auto setFlag(Flags flag) -> NSOFile& {
         mFlags |= flag;
         return *this;
@@ -182,11 +178,6 @@ public:
 
     [[nodiscard]] auto getFlag() const -> std::uint32_t {
         return mFlags;
-    }
-
-    auto setModuleId(const ModuleId& id) -> NSOFile& {
-        std::memcpy(mModuleId.data(), id.data(), sizeof(ModuleId));
-        return *this;
     }
 
     [[nodiscard]] auto getModuleId() const -> const ModuleId& {
@@ -256,7 +247,7 @@ public:
     auto loadNSO(std::string_view path, bool skip_validation = false) -> NSOFile&;
     auto loadELF(std::string_view path) -> NSOFile&;
 
-    auto saveNSO(std::string_view path, std::optional<std::uint32_t> flags = std::nullopt) -> NSOFile&;
+    auto saveNSO(std::string_view path, const std::optional<std::string_view>& name = std::nullopt, const std::optional<ModuleId>& module_id = std::nullopt) -> NSOFile&;
     auto saveELF(std::string_view path) -> NSOFile&;
 
     [[nodiscard]] auto getRocrtInit() const -> const RocrtInit*;
@@ -275,10 +266,32 @@ private:
         return *this;
     }
 
+    [[nodiscard]] auto getSection(std::uint32_t section) -> std::vector<std::uint8_t>& {
+        return mSections.at(section);
+    }
+
+    [[nodiscard]] auto getText() -> std::vector<std::uint8_t>& {
+        return getSection(Section_Text);
+    }
+
+    [[nodiscard]] auto getRodata() -> std::vector<std::uint8_t>& {
+        return getSection(Section_Ro);
+    }
+
+    [[nodiscard]] auto getData() -> std::vector<std::uint8_t>& {
+        return getSection(Section_Data);
+    }
+
+    [[nodiscard]] auto getName() const -> std::string_view {
+        return mName;
+    }
+
     auto setBssSize(std::size_t size) -> NSOFile& {
         mBssSize = size;
         return *this;
     }
+
+    auto setModuleId(const ModuleId& id) -> NSOFile&;
 
     auto setModuleNameFromRodata() -> void;
     auto setModuleIdFromRodata() -> void;

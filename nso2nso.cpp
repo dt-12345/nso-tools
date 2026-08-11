@@ -5,6 +5,23 @@
 #include <span>
 #include <string>
 
+static auto ParseHexit(const char c) -> std::uint8_t {
+    if ('a' <= c && c <= 'f') return c - 'a' + 0xa;
+    if ('A' <= c && c <= 'F') return c - 'A' + 0xa;
+    if ('0' <= c && c <= '9') return c - '0';
+    return 0;
+}
+
+static auto ParseHexString(std::string_view value) -> ModuleId {
+    ModuleId id{};
+
+    for (std::size_t i = 0; i < std::min(value.size() / 2, sizeof(ModuleId)); ++i) {
+        id[i] = ParseHexit(value[i * 2 + 1]) | ParseHexit(value[i * 2 + 0]) << 4;
+    }
+
+    return id;
+}
+
 auto main(std::int32_t argc, const char** argv) -> std::int32_t {
     constexpr auto print_usage = []() -> void {
         std::cout
@@ -15,6 +32,8 @@ auto main(std::int32_t argc, const char** argv) -> std::int32_t {
             << "  Basic Options\n"
             << "    --help, -h              print help message\n"
             << "    --output, -o            output filepath\n"
+            << "    --name, -n              override module name\n"
+            << "    --id, -i                override module ID\n"
             << "  Compression Options (prefix with `no` to invert)\n"
             << "    --compress-text         compress .text section (default)\n"
             << "    --compress-ro           compress .rodata section (default)\n"
@@ -44,6 +63,8 @@ auto main(std::int32_t argc, const char** argv) -> std::int32_t {
 
     const auto args = std::span(argv + 1, argc - 2);
     std::string outpath = "";
+    auto module_name = std::optional<std::string_view>{};
+    auto module_id = std::optional<ModuleId>{};
     bool no_compress_text = false;
     bool no_compress_ro = false;
     bool no_compress_data = false;
@@ -68,6 +89,18 @@ auto main(std::int32_t argc, const char** argv) -> std::int32_t {
                     return 1;
                 }
                 outpath = args[i];
+            } else if (name == "name") {
+                if (i++ >= args.size() - 1) {
+                    std::cerr << "Expected module name but no arguments remain\n";
+                    return 1;
+                }
+                module_name = args[i];
+            } else if (name == "id") {
+                if (i++ >= args.size() - 1) {
+                    std::cerr << "Expected module ID but no arguments remain\n";
+                    return 1;
+                }
+                module_id = ParseHexString(args[i]);
             } else if (name == "compress-text") {
                 no_compress_text = false;
             } else if (name == "no-compress-text") {
@@ -129,6 +162,18 @@ auto main(std::int32_t argc, const char** argv) -> std::int32_t {
                     return 1;
                 }
                 outpath = args[i];
+            } else if (name == "n") {
+                if (i++ >= args.size() - 1) {
+                    std::cerr << "Expected module name but no arguments remain\n";
+                    return 1;
+                }
+                module_name = args[i];
+            } else if (name == "i") {
+                if (i++ >= args.size() - 1) {
+                    std::cerr << "Expected module ID but no arguments remain\n";
+                    return 1;
+                }
+                module_id = ParseHexString(args[i]);
             } else if (name == "h") {
                 print_usage();
                 return 0;
@@ -160,7 +205,7 @@ auto main(std::int32_t argc, const char** argv) -> std::int32_t {
         .unsetFlag(DataHash, no_verify_data)
         .setFlag(ExecuteOnlyMemory, execute_only)
         .setFlag(UseZbicCompression, use_zstd_for_text)
-        .saveNSO(outpath);
+        .saveNSO(outpath, module_name, module_id);
 
     return 0;
 }

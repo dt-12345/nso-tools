@@ -383,8 +383,14 @@ auto NSOFile::loadELF(std::string_view path) -> NSOFile& {
     return *this;
 }
 
-auto NSOFile::saveNSO(std::string_view path, std::optional<std::uint32_t> flags) -> NSOFile& {
-    mFlags = flags.value_or(mFlags);
+auto NSOFile::saveNSO(std::string_view path, const std::optional<std::string_view>& name, const std::optional<ModuleId>& module_id) -> NSOFile& {
+    if (name) {
+        setName(*name);
+    }
+
+    if (module_id) {
+        setModuleId(*module_id);
+    }
 
     NSOHeader header;
     std::memset(std::addressof(header), 0, sizeof(header));
@@ -728,6 +734,36 @@ auto NSOFile::findModuleIdRange() const -> std::optional<Range> {
     }
 }
 
+auto NSOFile::setModuleId(const ModuleId& id) -> NSOFile& {
+    const auto range = findModuleIdRange();
+    if (!range) {
+        Panic("No module id in file");
+    }
+
+    if (!isInRodata(range->start, range->size)) {
+        Panic(".note.gnu.build-id must be in .rodata");
+    }
+
+    if (range->size < sizeof(Elf64_Nhdr)) {
+        Panic("Module id range is too small");
+    }
+
+    const auto header = reinterpret_cast<const Elf64_Nhdr*>(getRodata().data() + range->start - getRodataOffset());
+    const auto id_size = header->n_descsz;
+    if (id_size > sizeof(ModuleId)) {
+        Panic("Invalid module id size");
+    }
+
+    if (range->size < sizeof(Elf64_Nhdr) + header->n_namesz + header->n_descsz) {
+        Panic("Module id range is too small");
+    }
+
+    std::memcpy(mModuleId.data(), id.data(), id_size);
+    std::memcpy(getRodata().data() + range->start + sizeof(Elf64_Nhdr) + header->n_namesz - getRodataOffset(), id.data(), id_size);
+
+    return *this;
+}
+
 auto NSOFile::setModuleNameFromRodata() -> void {
     const auto module_name_range = findModuleNameRange();
     if (!module_name_range) {
@@ -754,7 +790,15 @@ auto NSOFile::setModuleNameFromRodata() -> void {
         Panic("Module name range is too small to be valid");
     }
 
-    setName(std::string_view{ reinterpret_cast<const char*>(rodata.data() + rodata_offset + sizeof(NxDebuglink)), nx_debuglink->name_size });
+    mName = { reinterpret_cast<const char*>(rodata.data() + rodata_offset + sizeof(NxDebuglink)), nx_debuglink->name_size };
+
+    if (mName.ends_with(".nss")) {
+        mName = mName.substr(0, mName.size() - 4);
+    }
+
+    if (const auto pos = mName.find_last_of("/\\")) {
+        mName = mName.substr(pos + 1);
+    }
 }
 
 auto NSOFile::setModuleIdFromRodata() -> void {
