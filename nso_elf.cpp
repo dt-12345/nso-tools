@@ -203,9 +203,9 @@ public:
     auto write(std::string_view path) const -> void;
 
 private:
-    static constexpr const auto cPhdrCount = Section_Count + 1; // 3 sections + dynamic
+    static constexpr const auto cPhdrCount = Segment_Count + 1; // 3 segments + dynamic
     static constexpr const auto cDynamicIndex = cPhdrCount - 1;
-    static constexpr const std::size_t cElfSectionAlign = 0x10000;
+    static constexpr const std::size_t cProgramAlign = 0x10000;
     static constexpr const std::size_t cDynamicAlign = 8;
 
     struct ProgBits {
@@ -247,8 +247,10 @@ private:
         SectionType_DYNAMIC             , // parsed from module header
         SectionType_GOT                 , // between .dynamic and .got.plt on newer versions, between .got.plt and .init_array on older versions (verify against relocations)
         SectionType_GOT_PLT             , // parsed from .dynamic
+        SectionType_ROCRT_ALIGN_RELROEND, // between relro region and RW
         SectionType_RW                  , // remaining range
         SectionType_ATEXIT              , // .rel.dyn or .rela.dyn relocations after .got/.got.plt/.init_array/.fini_array (whichever comes last)
+        SectionType_ROCRT_ALIGN_BSSEND  , // TODO: padding after .bss - no good way of telling what's padding and what's not
         // .bss
         SectionType_ZI                  , // .bss
 
@@ -285,8 +287,10 @@ private:
         ".dynamic",
         ".got",
         ".got.plt",
+        ".rocrt.align.relroend",
         "RW",
         ".atexit",
+        ".rocrt.align.bssend",
         "ZI",
     };
 
@@ -693,13 +697,13 @@ static auto ReadEhFrame(
 }
 
 auto ELFBuilder::splitText(Context& ctx) -> void {
-    const auto& section_data = ctx.nso.getText();
+    const auto& segment_data = ctx.nso.getText();
 
-    if (section_data.size() < cMinimumRocrtInitSize) {
-        Panic("Invalid .text section");
+    if (segment_data.size() < cMinimumRocrtInitSize) {
+        Panic("Invalid .text segment");
     }
 
-    const auto rocrt_init = reinterpret_cast<const RocrtInit*>(section_data.data());
+    const auto rocrt_init = reinterpret_cast<const RocrtInit*>(segment_data.data());
     ctx.rocrt_version = GetRocrtVersion(rocrt_init);
     // catch libnx being goofy
     if (ctx.rocrt_version == 1 && std::memcmp(std::addressof(ctx.header->relro_start), cLibNXMagic, sizeof(cLibNXMagic)) == 0) {
@@ -708,14 +712,14 @@ auto ELFBuilder::splitText(Context& ctx) -> void {
     }
     
     // EX
-    const auto plt_begin = MatchPltResolver(section_data);
+    const auto plt_begin = MatchPltResolver(segment_data);
     if (plt_begin == std::numeric_limits<std::size_t>::max()) {
         // if no .plt found, then assign the entire executable region to .text
         auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_EX]);
         shdr.sh_flags = SHF_ALLOC | SHF_EXECINSTR;
         shdr.sh_addr = ctx.nso.getTextOffset();
-        shdr.sh_offset = mPhdrs[Section_Text].p_offset;
-        shdr.sh_size = section_data.size();
+        shdr.sh_offset = mPhdrs[Segment_Text].p_offset;
+        shdr.sh_size = segment_data.size();
         shdr.sh_link = 0;
         shdr.sh_info = 0;
         shdr.sh_addralign = 1 << 6;
@@ -725,7 +729,7 @@ auto ELFBuilder::splitText(Context& ctx) -> void {
         auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_EX]);
         shdr.sh_flags = SHF_ALLOC | SHF_EXECINSTR;
         shdr.sh_addr = ctx.nso.getTextOffset();
-        shdr.sh_offset = mPhdrs[Section_Text].p_offset;
+        shdr.sh_offset = mPhdrs[Segment_Text].p_offset;
         shdr.sh_size = plt_begin;
         shdr.sh_link = 0;
         shdr.sh_info = 0;
@@ -734,11 +738,11 @@ auto ELFBuilder::splitText(Context& ctx) -> void {
     }
 
     // .plt
-    const auto total_entry_size = MatchAllPltEntries(std::span(section_data).subspan(plt_begin + cPltResolverSize));
+    const auto total_entry_size = MatchAllPltEntries(std::span(segment_data).subspan(plt_begin + cPltResolverSize));
     auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_PLT]);
     shdr.sh_flags = SHF_ALLOC | SHF_EXECINSTR | 2 << 0x1c; // not sure what the SHF_MASKPROC flags are here
     shdr.sh_addr = ctx.nso.getTextOffset() + plt_begin;
-    shdr.sh_offset = mPhdrs[Section_Text].p_offset + plt_begin;
+    shdr.sh_offset = mPhdrs[Segment_Text].p_offset + plt_begin;
     shdr.sh_size = cPltResolverSize + total_entry_size;
     shdr.sh_link = 0;
     shdr.sh_info = 0;
@@ -746,12 +750,12 @@ auto ELFBuilder::splitText(Context& ctx) -> void {
     shdr.sh_entsize = 0;
 
     const auto total_size = plt_begin + cPltResolverSize + total_entry_size;
-    if (section_data.size() > total_size) {
+    if (segment_data.size() > total_size) {
         auto& shdr = addSection(SHT_PROGBITS, ".text.1");
         shdr.sh_flags = SHF_ALLOC | SHF_EXECINSTR;
         shdr.sh_addr = ctx.nso.getTextOffset() + total_size;
-        shdr.sh_offset = mPhdrs[Section_Text].p_offset + total_size;
-        shdr.sh_size = section_data.size() - total_size;
+        shdr.sh_offset = mPhdrs[Segment_Text].p_offset + total_size;
+        shdr.sh_size = segment_data.size() - total_size;
         shdr.sh_link = 0;
         shdr.sh_info = 0;
         shdr.sh_addralign = 1 << 2;
@@ -760,16 +764,16 @@ auto ELFBuilder::splitText(Context& ctx) -> void {
 }
 
 auto ELFBuilder::splitRodata(Context& ctx) -> void {
-    const auto& section_data = ctx.nso.getRodata();
-    const auto start_offset = mPhdrs[Section_Ro].p_offset;
+    const auto& segment_data = ctx.nso.getRodata();
+    const auto start_offset = mPhdrs[Segment_Ro].p_offset;
 
     // .rocrt.initro
     if (ctx.rocrt_version == 1) {
-        if (section_data.size() < sizeof(RocrtInit)) {
-            Panic("Invalid .rodata section");
+        if (segment_data.size() < sizeof(RocrtInit)) {
+            Panic("Invalid .rodata segment");
         }
 
-        const auto rocrt_init = reinterpret_cast<const RocrtInit*>(section_data.data());
+        const auto rocrt_init = reinterpret_cast<const RocrtInit*>(segment_data.data());
         if (rocrt_init->entry == 1) { // failsafe for unofficial NSOs that pass the rocrt version check but don't actually have this section
             auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_ROCRT_INITRO]);
             shdr.sh_flags = SHF_ALLOC;
@@ -787,7 +791,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
 
             ctx.rocrt_version = 0;
             if (ctx.nso.isInText(rocrt_init->rocrt_info_offset, cMinimumRocrtInitSize + sizeof(LibNXExtension))) {
-                const auto ext = reinterpret_cast<const LibNXExtension*>(section_data.data() + rocrt_init->rocrt_info_offset + cMinimumRocrtInitSize);
+                const auto ext = reinterpret_cast<const LibNXExtension*>(segment_data.data() + rocrt_init->rocrt_info_offset + cMinimumRocrtInitSize);
                 if (std::memcmp(ext->signature, cLibNXMagic, sizeof(cLibNXMagic)) == 0) {
                     ctx.libnx_extension = ext;
                     std::cout << "[INFO] Detected LibNX extension\n";
@@ -832,7 +836,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         shdr.sh_entsize = 0;
 
         // we know that this is in-bounds because we would have panicked above if it wasn't
-        const auto initro = reinterpret_cast<const RocrtInit*>(section_data.data());
+        const auto initro = reinterpret_cast<const RocrtInit*>(segment_data.data());
         // these two structures *should* be adjacent to each other, but to avoid creating an invalid section,
         // make sure that the version starts where the header ends
         if (initro->rocrt_version_offset == ctx.header_offset - ctx.nso.getRodataOffset() + sizeof(ModuleHeader)) {
@@ -865,7 +869,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         shdr.sh_entsize = sizeof(Elf64_Rel);
 
         const auto count = ctx.rel_size->d_un.d_val / sizeof(Elf64_Rel);
-        for (const auto& rel : std::span(reinterpret_cast<const Elf64_Rel*>(section_data.data() + rodata_offset), count)) {
+        for (const auto& rel : std::span(reinterpret_cast<const Elf64_Rel*>(segment_data.data() + rodata_offset), count)) {
             ctx.relocations.insert(rel.r_offset);
         }
     }
@@ -890,7 +894,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         shdr.sh_entsize = sizeof(Elf64_Rela);
 
         const auto count = ctx.rela_size->d_un.d_val / sizeof(Elf64_Rela);
-        for (const auto& rel : std::span(reinterpret_cast<const Elf64_Rela*>(section_data.data() + rodata_offset), count)) {
+        for (const auto& rel : std::span(reinterpret_cast<const Elf64_Rela*>(segment_data.data() + rodata_offset), count)) {
             ctx.relocations.insert(rel.r_offset);
         }
     }
@@ -916,7 +920,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
                 shdr.sh_entsize = sizeof(Elf64_Rel);
 
                 const auto count = ctx.plt_rel_size->d_un.d_val / sizeof(Elf64_Rel);
-                for (const auto& rel : std::span(reinterpret_cast<const Elf64_Rel*>(section_data.data() + rodata_offset), count)) {
+                for (const auto& rel : std::span(reinterpret_cast<const Elf64_Rel*>(segment_data.data() + rodata_offset), count)) {
                     ctx.max_plt_reloc = std::max(ctx.max_plt_reloc, rel.r_offset + sizeof(void*));
                 }
                 break;
@@ -939,7 +943,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
                 shdr.sh_entsize = sizeof(Elf64_Rela);
 
                 const auto count = ctx.plt_rel_size->d_un.d_val / sizeof(Elf64_Rela);
-                for (const auto& rel : std::span(reinterpret_cast<const Elf64_Rela*>(section_data.data() + rodata_offset), count)) {
+                for (const auto& rel : std::span(reinterpret_cast<const Elf64_Rela*>(segment_data.data() + rodata_offset), count)) {
                     ctx.max_plt_reloc = std::max(ctx.max_plt_reloc, rel.r_offset + sizeof(void*));
                 }
                 break;
@@ -969,7 +973,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
 
         std::size_t target = 0;
         const auto count = ctx.relr_size->d_un.d_val / sizeof(Elf64_Relr);
-        for (auto rel : std::span(reinterpret_cast<const Elf64_Relr*>(section_data.data() + rodata_offset), count)) {
+        for (auto rel : std::span(reinterpret_cast<const Elf64_Relr*>(segment_data.data() + rodata_offset), count)) {
             if ((rel & 1) == 0) {
                 ctx.relocations.insert(rel);
                 target = rel + sizeof(void*);
@@ -994,7 +998,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
             Panic(".hash must be in .rodata");
         }
 
-        const auto hash_table = reinterpret_cast<const ElfHashTable*>(section_data.data() + ctx.hash->d_un.d_ptr - ctx.nso.getRodataOffset());
+        const auto hash_table = reinterpret_cast<const ElfHashTable*>(segment_data.data() + ctx.hash->d_un.d_ptr - ctx.nso.getRodataOffset());
         const auto total_size = sizeof(ElfHashTable) + hash_table->nbucket * sizeof(std::uint32_t) + hash_table->nchain * sizeof(std::uint32_t);
 
         sym_count = hash_table->nchain;
@@ -1022,7 +1026,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         }
 
         const auto base_offset = ctx.gnu_hash->d_un.d_ptr - ctx.nso.getRodataOffset();
-        const auto hash_table = reinterpret_cast<const GnuHashTable*>(section_data.data() + base_offset);
+        const auto hash_table = reinterpret_cast<const GnuHashTable*>(segment_data.data() + base_offset);
         const auto bucket_offset = sizeof(GnuHashTable) + hash_table->bloom_size * sizeof(std::uint64_t);
         auto total_size = bucket_offset + hash_table->nbucket * sizeof(std::uint32_t);
 
@@ -1031,7 +1035,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         }
 
         std::uint32_t max_bucket = 0;
-        const auto buckets = reinterpret_cast<const std::uint32_t*>(section_data.data() + base_offset + bucket_offset);
+        const auto buckets = reinterpret_cast<const std::uint32_t*>(segment_data.data() + base_offset + bucket_offset);
         for (const auto bucket : std::span(buckets, hash_table->nbucket)) {
             max_bucket = std::max(bucket, max_bucket);
         }
@@ -1044,7 +1048,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
             }
 
             sym_count = max_bucket;
-            auto current_pos = reinterpret_cast<const std::uint32_t*>(section_data.data() + base_offset + total_size);
+            auto current_pos = reinterpret_cast<const std::uint32_t*>(segment_data.data() + base_offset + total_size);
             while ((*current_pos++ & 1) == 0) {
                 total_size += sizeof(std::uint32_t);
                 ++sym_count;
@@ -1162,7 +1166,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
 
         exception_handling_end = std::max(eh_frame_hdr_start + eh_frame_hdr_size, exception_handling_end);
 
-        const auto eh_frame_hdr = reinterpret_cast<const EhFrameHdr*>(section_data.data() + eh_frame_hdr_start - ctx.nso.getRodataOffset());
+        const auto eh_frame_hdr = reinterpret_cast<const EhFrameHdr*>(segment_data.data() + eh_frame_hdr_start - ctx.nso.getRodataOffset());
         if (eh_frame_hdr->version != 1) {
             Panic("Invalid .eh_frame_hdr version");
         }
@@ -1176,7 +1180,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
                 default: Panic("Invalid pointer apply type");
             }
 
-            const auto ptr_enc_data = std::span(section_data).subspan(eh_frame_hdr_start - ctx.nso.getRodataOffset() + sizeof(EhFrameHdr));
+            const auto ptr_enc_data = std::span(segment_data).subspan(eh_frame_hdr_start - ctx.nso.getRodataOffset() + sizeof(EhFrameHdr));
             if (eh_frame_hdr->eh_frame_ptr_enc & IsSignedMask) {
                 eh_frame_offset = static_cast<std::size_t>(static_cast<std::int64_t>(eh_frame_offset) + ReadSigned(eh_frame_hdr->eh_frame_ptr_enc, ptr_enc_data));
             } else {
@@ -1193,7 +1197,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
             Panic(".eh_frame must be in .rodata");
         }
 
-        const auto frame_size = ReadEhFrame(ctx.nso, section_data, eh_frame_hdr_start, eh_frame_offset, lsda_range);
+        const auto frame_size = ReadEhFrame(ctx.nso, segment_data, eh_frame_hdr_start, eh_frame_offset, lsda_range);
         if (!ctx.nso.isInRodata(eh_frame_offset, frame_size)) {
             Panic(".eh_frame must be in .rodata");
         }
@@ -1256,9 +1260,9 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
     }
 
     // .api_info
-    if (build_id_range->size + build_id_range->start < ctx.nso.getRodataOffset() + section_data.size()) {
+    if (build_id_range->size + build_id_range->start < ctx.nso.getRodataOffset() + segment_data.size()) {
         const auto start = build_id_range->size + build_id_range->start;
-        const auto size = ctx.nso.getRodataOffset() + section_data.size() - start;
+        const auto size = ctx.nso.getRodataOffset() + segment_data.size() - start;
         if (!ctx.nso.isInRodata(exception_handling_end, size)) {
             Panic(".api_info must be in .rodata");
         }
@@ -1311,7 +1315,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         // shdr.sh_flags = SHF_ALLOC | SHF_MERGE | SHF_STRINGS;
         // shdr.sh_addr = ctx.nso.getRodataOffset();
         // shdr.sh_offset = start_offset;
-        // shdr.sh_size = section_data.size();
+        // shdr.sh_size = segment_data.size();
         // shdr.sh_link = 0;
         // shdr.sh_info = 0;
         // shdr.sh_addralign = 1 << 2;
@@ -1320,7 +1324,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
 }
 
 auto ELFBuilder::splitData(Context& ctx) -> void {
-    const auto start_offset = mPhdrs[Section_Data].p_offset;
+    const auto start_offset = mPhdrs[Segment_Data].p_offset;
 
     Range ia_range{}, fa_range{};
 
@@ -1641,7 +1645,22 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
             max_offset = std::max(shdr.sh_addr + shdr.sh_size, max_offset);
         }
 
-        const auto rw_start = (max_offset + 0x1000 - 1) / 0x1000 * 0x1000;
+        const auto rw_start = (max_offset + cSegmentAlignment - 1) / cSegmentAlignment * cSegmentAlignment;
+
+        // .rocrt.align.relroend
+        if (rw_start != max_offset) {
+            const auto offset = max_offset - ctx.nso.getDataOffset();
+            auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_ROCRT_ALIGN_RELROEND]);
+            shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
+            shdr.sh_addr = max_offset;
+            shdr.sh_offset = start_offset + offset;
+            shdr.sh_size = rw_start - max_offset;
+            shdr.sh_link = 0;
+            shdr.sh_info = 0;
+            shdr.sh_addralign = 1 << 2;
+            shdr.sh_entsize = 0;
+        }
+
         if (ctx.nso.isInData(rw_start)) {
             const auto data_offset = rw_start - ctx.nso.getDataOffset();
             auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_RW]);
@@ -1663,7 +1682,7 @@ auto ELFBuilder::splitBss(Context& ctx) -> void {
         auto& shdr = addSection(SHT_NOBITS, cSectionNames[SectionType_ZI]);
         shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
         shdr.sh_addr = ctx.nso.getBssOffset();
-        shdr.sh_offset = mPhdrs[Section_Data].p_offset + mPhdrs[Section_Data].p_filesz;
+        shdr.sh_offset = mPhdrs[Segment_Data].p_offset + mPhdrs[Segment_Data].p_filesz;
         shdr.sh_size = ctx.nso.getBssSize();
         shdr.sh_link = 0;
         shdr.sh_info = 0;
@@ -1710,40 +1729,40 @@ auto ELFBuilder::splitSections(const NSOFile& nso) -> void {
 }
 
 auto ELFBuilder::build(const NSOFile& nso) -> void {
-    std::size_t current_file_offset = (sizeof(mHeader) + cElfSectionAlign - 1) / cElfSectionAlign * cElfSectionAlign;
+    std::size_t current_file_offset = (sizeof(mHeader) + cProgramAlign - 1) / cProgramAlign * cProgramAlign;
     std::size_t current_virt_offset = 0;
     std::size_t current_phys_offset = 0;
-    for (std::uint32_t section = Section_Start; section < Section_Count; ++section) {
-        const auto& section_data = nso.getSection(section);
-        auto& phdr = mPhdrs[section];
+    for (std::uint32_t segment = Segment_Start; segment < Segment_Count; ++segment) {
+        const auto& segment_data = nso.getSegment(segment);
+        auto& phdr = mPhdrs[segment];
         phdr.p_type = PT_LOAD;
         phdr.p_offset = current_file_offset;
         phdr.p_vaddr = current_virt_offset;
         phdr.p_paddr = current_phys_offset;
-        phdr.p_filesz = section_data.size();
-        phdr.p_memsz = section_data.size();
-        phdr.p_align = cElfSectionAlign;
-        switch (section) {
-            case Section_Text:
+        phdr.p_filesz = segment_data.size();
+        phdr.p_memsz = segment_data.size();
+        phdr.p_align = cProgramAlign;
+        switch (segment) {
+            case Segment_Text:
                 if (nso.isFlagSet(ExecuteOnlyMemory)) {
                     phdr.p_flags = PF_X;
                 } else {
                     phdr.p_flags = PF_R | PF_X;
                 }
                 break;
-            case Section_Ro:
+            case Segment_Ro:
                 phdr.p_flags = PF_R;
                 break;
-            case Section_Data:
+            case Segment_Data:
                 phdr.p_flags = PF_R | PF_W;
                 phdr.p_memsz += nso.getBssSize();
                 break;
         }
 
-        addProgBits(section_data, cElfSectionAlign);
-        current_file_offset = (current_file_offset + phdr.p_filesz + cElfSectionAlign - 1) / cElfSectionAlign * cElfSectionAlign;
-        current_virt_offset += (phdr.p_memsz + cSectionAlignment - 1) / cSectionAlignment * cSectionAlignment;
-        current_phys_offset += (phdr.p_memsz + cSectionAlignment - 1) / cSectionAlignment * cSectionAlignment;
+        addProgBits(segment_data, cProgramAlign);
+        current_file_offset = (current_file_offset + phdr.p_filesz + cProgramAlign - 1) / cProgramAlign * cProgramAlign;
+        current_virt_offset += (phdr.p_memsz + cSegmentAlignment - 1) / cSegmentAlignment * cSegmentAlignment;
+        current_phys_offset += (phdr.p_memsz + cSegmentAlignment - 1) / cSegmentAlignment * cSegmentAlignment;
     }
 
     const auto dynamic = nso.findDynamicRange();
@@ -1757,7 +1776,7 @@ auto ELFBuilder::build(const NSOFile& nso) -> void {
 
     mPhdrs[cDynamicIndex].p_type = PT_DYNAMIC;
     mPhdrs[cDynamicIndex].p_flags = PF_R | PF_W;
-    mPhdrs[cDynamicIndex].p_offset = mPhdrs[Section_Data].p_offset + dynamic->start - nso.getDataOffset();
+    mPhdrs[cDynamicIndex].p_offset = mPhdrs[Segment_Data].p_offset + dynamic->start - nso.getDataOffset();
     mPhdrs[cDynamicIndex].p_vaddr = dynamic->start;
     mPhdrs[cDynamicIndex].p_paddr = dynamic->start;
     mPhdrs[cDynamicIndex].p_filesz = dynamic->size;

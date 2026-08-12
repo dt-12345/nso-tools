@@ -108,7 +108,7 @@ static auto CompressZstd(std::vector<std::uint8_t>& dst, std::span<const std::ui
     return static_cast<std::uint32_t>(compressed_size);
 };
 
-static constexpr std::string_view cSectionNames[] = { ".text", ".rodata", ".data" };
+static constexpr std::string_view cSegmentNames[] = { ".text", ".rodata", ".data" };
 
 auto NSOFile::loadNSO(std::string_view path, bool skip_validation) -> NSOFile& {
     const auto file_data = ReadFile(path);
@@ -130,45 +130,45 @@ auto NSOFile::loadNSO(std::string_view path, bool skip_validation) -> NSOFile& {
     mFlags = header->flags;
     mBssSize = header->bss_size;
 
-    for (std::uint32_t section = Section_Start; section < Section_Count; ++section) {
+    for (std::uint32_t segment = Segment_Start; segment < Segment_Count; ++segment) {
         bool verify = false;
-        switch (section) {
-            case Section_Text:
+        switch (segment) {
+            case Segment_Text:
                 if (isFlagSet(TextCompress)) {
-                    const auto section_data = GetSpan(file_data, header->text_file_offset, header->text_compressed_size, ".text");
+                    const auto segment_data = GetSpan(file_data, header->text_file_offset, header->text_compressed_size, ".text");
                     auto decompressed = std::vector<std::uint8_t>(header->text_size);
                     if (isFlagSet(UseZbicCompression)) {
-                        DecompressZstd(decompressed, section_data);
+                        DecompressZstd(decompressed, segment_data);
                     } else {
-                        DecompressLZ4(decompressed, section_data);
+                        DecompressLZ4(decompressed, segment_data);
                     }
-                    setSection(Section_Text, decompressed);
+                    setSegment(Segment_Text, decompressed);
                 } else {
-                    setSection(Section_Text, GetSpan(file_data, header->text_file_offset, header->text_size, ".text"));
+                    setSegment(Segment_Text, GetSpan(file_data, header->text_file_offset, header->text_size, ".text"));
                 }
 
                 verify = isFlagSet(TextHash);
                 break;
-            case Section_Ro:
+            case Segment_Ro:
                 if (isFlagSet(RoCompress)) {
-                    const auto section_data = GetSpan(file_data, header->ro_file_offset, header->ro_compressed_size, ".rodata");
+                    const auto segment_data = GetSpan(file_data, header->ro_file_offset, header->ro_compressed_size, ".rodata");
                     auto decompressed = std::vector<std::uint8_t>(header->ro_size);
-                    DecompressLZ4(decompressed, section_data);
-                    setSection(Section_Ro, decompressed);
+                    DecompressLZ4(decompressed, segment_data);
+                    setSegment(Segment_Ro, decompressed);
                 } else {
-                    setSection(Section_Ro, GetSpan(file_data, header->ro_file_offset, header->ro_size, ".rodata"));
+                    setSegment(Segment_Ro, GetSpan(file_data, header->ro_file_offset, header->ro_size, ".rodata"));
                 }
 
                 verify = isFlagSet(RoHash);
                 break;
-            case Section_Data:
+            case Segment_Data:
                 if (isFlagSet(DataCompress)) {
-                    const auto section_data = GetSpan(file_data, header->data_file_offset, header->data_compressed_size, ".data");
+                    const auto segment_data = GetSpan(file_data, header->data_file_offset, header->data_compressed_size, ".data");
                     auto decompressed = std::vector<std::uint8_t>(header->data_size);
-                    DecompressLZ4(decompressed, section_data);
-                    setSection(Section_Data, decompressed);
+                    DecompressLZ4(decompressed, segment_data);
+                    setSegment(Segment_Data, decompressed);
                 } else {
-                    setSection(Section_Data, GetSpan(file_data, header->data_file_offset, header->data_size, ".data"));
+                    setSegment(Segment_Data, GetSpan(file_data, header->data_file_offset, header->data_size, ".data"));
                 }
 
                 verify = isFlagSet(DataHash);
@@ -177,9 +177,9 @@ auto NSOFile::loadNSO(std::string_view path, bool skip_validation) -> NSOFile& {
 
         if (verify && !skip_validation) {
             std::array<std::uint8_t, picosha2::k_digest_size> hash;
-            picosha2::hash256(getSection(section), hash);
-            if (std::memcmp(hash.data(), header->section_hashes[section].data(), hash.size()) != 0) {
-                Panic("Hash mismatch for ", cSectionNames[section]);
+            picosha2::hash256(getSegment(segment), hash);
+            if (std::memcmp(hash.data(), header->segment_hashes[segment].data(), hash.size()) != 0) {
+                Panic("Hash mismatch for ", cSegmentNames[segment]);
             }
         }
     }
@@ -250,11 +250,11 @@ auto NSOFile::loadELF(std::string_view path) -> NSOFile& {
         Panic("Program/section header tables are out of range");
     }
 
-    std::uint32_t current_section = 0;
+    std::uint32_t current_segment = 0;
     std::size_t ro_start = 0, ro_end = 0;
     const auto phdrs = std::span(reinterpret_cast<const Elf64_Phdr*>(file_data.data() + phdr_start), elf_hdr->e_phnum);
     for (const auto& phdr : phdrs) {
-        if (current_section >= Section_Count) {
+        if (current_segment >= Segment_Count) {
             break;
         }
         
@@ -262,11 +262,11 @@ auto NSOFile::loadELF(std::string_view path) -> NSOFile& {
             continue;
         }
 
-        const auto section_data = GetSpan(file_data, phdr.p_offset, phdr.p_filesz, "Program");
-        setSection(current_section, section_data);
+        const auto segment_data = GetSpan(file_data, phdr.p_offset, phdr.p_filesz, "Program");
+        setSegment(current_segment, segment_data);
 
-        switch (current_section) {
-            case Section_Text:
+        switch (current_segment) {
+            case Segment_Text:
                 if ((phdr.p_flags & PF_X) == 0) {
                     Panic(".text segment is not executable");
                 }
@@ -277,14 +277,14 @@ auto NSOFile::loadELF(std::string_view path) -> NSOFile& {
                     setFlag(ExecuteOnlyMemory);
                 }
                 break;
-            case Section_Ro:
+            case Segment_Ro:
                 if (phdr.p_flags != PF_R) {
                     Panic(".rodata segment is not read-only");
                 }
                 ro_start = phdr.p_offset;
                 ro_end = phdr.p_offset + phdr.p_filesz;
                 break;
-            case Section_Data:
+            case Segment_Data:
                 if (phdr.p_flags != (PF_R | PF_W)) {
                     Panic(".data segment is not read-write");
                 }
@@ -294,7 +294,7 @@ auto NSOFile::loadELF(std::string_view path) -> NSOFile& {
                 break;
         }
 
-        ++current_section;
+        ++current_segment;
     }
 
     bool found_note = false, found_dynsym = false, found_dynstr = false;
@@ -424,61 +424,61 @@ auto NSOFile::saveNSO(std::string_view path, const std::optional<std::string_vie
     current_file_offset = file.tellp();
 
     std::uint32_t memory_offset = 0;
-    for (std::uint32_t section = Section_Start; section < Section_Count; ++section) {
+    for (std::uint32_t segment = Segment_Start; segment < Segment_Count; ++segment) {
         bool verify = false;
-        const auto& section_data = getSection(section);
-        switch (section) {
-            case Section_Text:
+        const auto& segment_data = getSegment(segment);
+        switch (segment) {
+            case Segment_Text:
                 header.text_file_offset = current_file_offset;
                 header.text_memory_offset = memory_offset;
-                header.text_size = section_data.size();
+                header.text_size = segment_data.size();
                 if (isFlagSet(TextCompress)) {
                     auto compressed = std::vector<std::uint8_t>{};
                     if (isFlagSet(UseZbicCompression)) {
-                        header.text_compressed_size = CompressZstd(compressed, section_data);
+                        header.text_compressed_size = CompressZstd(compressed, segment_data);
                     } else {
-                        header.text_compressed_size = CompressLZ4(compressed, section_data);
+                        header.text_compressed_size = CompressLZ4(compressed, segment_data);
                     }
                     file.write(reinterpret_cast<const char*>(compressed.data()), compressed.size());
                 } else {
-                    file.write(reinterpret_cast<const char*>(section_data.data()), section_data.size());
+                    file.write(reinterpret_cast<const char*>(segment_data.data()), segment_data.size());
                 }
                 verify = isFlagSet(TextHash);
                 break;
-            case Section_Ro:
+            case Segment_Ro:
                 header.ro_file_offset = current_file_offset;
                 header.ro_memory_offset = memory_offset;
-                header.ro_size = section_data.size();
+                header.ro_size = segment_data.size();
                 if (isFlagSet(RoCompress)) {
                     auto compressed = std::vector<std::uint8_t>{};
-                    header.ro_compressed_size = CompressLZ4(compressed, section_data);
+                    header.ro_compressed_size = CompressLZ4(compressed, segment_data);
                     file.write(reinterpret_cast<const char*>(compressed.data()), compressed.size());
                 } else {
-                    file.write(reinterpret_cast<const char*>(section_data.data()), section_data.size());
+                    file.write(reinterpret_cast<const char*>(segment_data.data()), segment_data.size());
                 }
                 verify = isFlagSet(RoHash);
                 break;
-            case Section_Data:
+            case Segment_Data:
                 header.data_file_offset = current_file_offset;
                 header.data_memory_offset = memory_offset;
-                header.data_size = section_data.size();
+                header.data_size = segment_data.size();
                 if (isFlagSet(DataCompress)) {
                     auto compressed = std::vector<std::uint8_t>{};
-                    header.data_compressed_size = CompressLZ4(compressed, section_data);
+                    header.data_compressed_size = CompressLZ4(compressed, segment_data);
                     file.write(reinterpret_cast<const char*>(compressed.data()), compressed.size());
                 } else {
-                    file.write(reinterpret_cast<const char*>(section_data.data()), section_data.size());
+                    file.write(reinterpret_cast<const char*>(segment_data.data()), segment_data.size());
                 }
                 verify = isFlagSet(DataHash);
                 break;
         }
 
         if (verify) {
-            picosha2::hash256(getSection(section), header.section_hashes[section]);
+            picosha2::hash256(getSegment(segment), header.segment_hashes[segment]);
         }
 
         current_file_offset = file.tellp();
-        memory_offset += (section_data.size() + cSectionAlignment - 1) / cSectionAlignment * cSectionAlignment;
+        memory_offset += (segment_data.size() + cSegmentAlignment - 1) / cSegmentAlignment * cSegmentAlignment;
     }
 
     file.seekp(0);
@@ -490,7 +490,7 @@ auto NSOFile::saveNSO(std::string_view path, const std::optional<std::string_vie
 auto NSOFile::getRocrtInit() const -> const RocrtInit* {
     const auto& text = getText();
     if (text.size() < cMinimumRocrtInitSize) {
-        Panic("Invalid .text section");
+        Panic("Invalid .text segment");
     }
 
     return reinterpret_cast<const RocrtInit*>(text.data());

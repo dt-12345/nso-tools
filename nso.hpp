@@ -20,17 +20,17 @@ enum Flags {
     UseZbicCompression  = 1 << 7,
 };
 
-enum SectionType : std::uint32_t {
-    Section_Text    = 0,
-    Section_Ro      = 1,
-    Section_Data    = 2,
+enum SegmentType : std::uint32_t {
+    Segment_Text    = 0,
+    Segment_Ro      = 1,
+    Segment_Data    = 2,
 
-    Section_Count,
-    Section_Start   = Section_Text,
+    Segment_Count,
+    Segment_Start   = Segment_Text,
 };
 
 static constexpr const char NSO_SIGNATURE[4] = { 'N', 'S', 'O', '0' };
-static constexpr const std::size_t cSectionAlignment = 0x1000;
+static constexpr const std::size_t cSegmentAlignment = 0x1000;
 
 using Hash = std::array<std::uint8_t, 0x20>;
 using ModuleId = std::array<std::uint8_t, 0x20>;
@@ -67,7 +67,7 @@ struct NSOHeader {
             Hash ro_hash;
             Hash data_hash;
         };
-        Hash section_hashes[Section_Count];
+        Hash segment_hashes[Segment_Count];
     };
 };
 static_assert(sizeof(NSOHeader) == 0x100);
@@ -120,7 +120,7 @@ struct ElfHashTable {
 
 struct GnuHashTable {
     std::uint32_t nbucket;
-    std::uint32_t sym_offset;   // the index exported symbols start at (before this are imported symbols)
+    std::uint32_t sym_offset;   // the index exported symbols start at (before this are imported/hidden symbols)
     std::uint32_t bloom_size;
     std::uint32_t bloom_shift;
     // std::uint64_t bloom[bloom_size];
@@ -184,20 +184,20 @@ public:
         return mModuleId;
     }
 
-    [[nodiscard]] auto getSection(std::uint32_t section) const -> const std::vector<std::uint8_t>& {
-        return mSections.at(section);
+    [[nodiscard]] auto getSegment(std::uint32_t Segment) const -> const std::vector<std::uint8_t>& {
+        return mSegments.at(Segment);
     }
 
     [[nodiscard]] auto getText() const -> const std::vector<std::uint8_t>& {
-        return getSection(Section_Text);
+        return getSegment(Segment_Text);
     }
 
     [[nodiscard]] auto getRodata() const -> const std::vector<std::uint8_t>& {
-        return getSection(Section_Ro);
+        return getSegment(Segment_Ro);
     }
 
     [[nodiscard]] auto getData() const -> const std::vector<std::uint8_t>& {
-        return getSection(Section_Data);
+        return getSegment(Segment_Data);
     }
 
     [[nodiscard]] auto getBssSize() const -> std::size_t {
@@ -209,15 +209,15 @@ public:
     }
 
     [[nodiscard]] auto getRodataOffset() const -> std::size_t {
-        return (getTextOffset() + getSection(Section_Text).size() + cSectionAlignment- 1) / cSectionAlignment* cSectionAlignment;
+        return (getTextOffset() + getText().size() + cSegmentAlignment- 1) / cSegmentAlignment* cSegmentAlignment;
     }
 
     [[nodiscard]] auto getDataOffset() const -> std::size_t {
-        return (getRodataOffset() + getSection(Section_Ro).size() + cSectionAlignment - 1) / cSectionAlignment * cSectionAlignment;
+        return (getRodataOffset() + getRodata().size() + cSegmentAlignment - 1) / cSegmentAlignment * cSegmentAlignment;
     }
 
     [[nodiscard]] auto getBssOffset() const -> std::size_t {
-        return getDataOffset() + getSection(Section_Data).size();
+        return getDataOffset() + getData().size();
     }
 
     [[nodiscard]] auto isInText(std::size_t offset) const -> bool {
@@ -261,25 +261,25 @@ public:
     [[nodiscard]] auto findModuleIdRange() const -> std::optional<Range>;
 
 private:
-    auto setSection(std::uint32_t section, std::span<const std::uint8_t> data) -> NSOFile& {
-        mSections.at(section).assign(data.begin(), data.end());
+    auto setSegment(std::uint32_t Segment, std::span<const std::uint8_t> data) -> NSOFile& {
+        mSegments.at(Segment).assign(data.begin(), data.end());
         return *this;
     }
 
-    [[nodiscard]] auto getSection(std::uint32_t section) -> std::vector<std::uint8_t>& {
-        return mSections.at(section);
+    [[nodiscard]] auto getSegment(std::uint32_t Segment) -> std::vector<std::uint8_t>& {
+        return mSegments.at(Segment);
     }
 
     [[nodiscard]] auto getText() -> std::vector<std::uint8_t>& {
-        return getSection(Section_Text);
+        return getSegment(Segment_Text);
     }
 
     [[nodiscard]] auto getRodata() -> std::vector<std::uint8_t>& {
-        return getSection(Section_Ro);
+        return getSegment(Segment_Ro);
     }
 
     [[nodiscard]] auto getData() -> std::vector<std::uint8_t>& {
-        return getSection(Section_Data);
+        return getSegment(Segment_Data);
     }
 
     [[nodiscard]] auto getName() const -> std::string_view {
@@ -296,7 +296,7 @@ private:
     auto setModuleNameFromRodata() -> void;
     auto setModuleIdFromRodata() -> void;
 
-    std::array<std::vector<std::uint8_t>, Section_Count> mSections;
+    std::array<std::vector<std::uint8_t>, Segment_Count> mSegments;
     std::string mName;
     std::size_t mBssSize = 0;
     std::uint32_t mFlags = 0;
