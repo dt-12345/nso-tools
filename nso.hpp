@@ -184,8 +184,8 @@ public:
         return mModuleId;
     }
 
-    [[nodiscard]] auto getSegment(std::uint32_t Segment) const -> const std::vector<std::uint8_t>& {
-        return mSegments.at(Segment);
+    [[nodiscard]] auto getSegment(std::uint32_t segment) const -> const std::vector<std::uint8_t>& {
+        return mSegments.at(segment);
     }
 
     [[nodiscard]] auto getText() const -> const std::vector<std::uint8_t>& {
@@ -261,13 +261,13 @@ public:
     [[nodiscard]] auto findModuleIdRange() const -> std::optional<Range>;
 
 private:
-    auto setSegment(std::uint32_t Segment, std::span<const std::uint8_t> data) -> NSOFile& {
-        mSegments.at(Segment).assign(data.begin(), data.end());
+    auto setSegment(std::uint32_t segment, std::span<const std::uint8_t> data) -> NSOFile& {
+        mSegments.at(segment).assign(data.begin(), data.end());
         return *this;
     }
 
-    [[nodiscard]] auto getSegment(std::uint32_t Segment) -> std::vector<std::uint8_t>& {
-        return mSegments.at(Segment);
+    [[nodiscard]] auto getSegment(std::uint32_t segment) -> std::vector<std::uint8_t>& {
+        return mSegments.at(segment);
     }
 
     [[nodiscard]] auto getText() -> std::vector<std::uint8_t>& {
