@@ -257,9 +257,9 @@ private:
         SectionType_ROCRT_ALIGN_RELROEND, // between relro region and RW
         SectionType_RW                  , // remaining range
         SectionType_ATEXIT              , // .rel.dyn or .rela.dyn relocations after .got/.got.plt/.init_array/.fini_array (whichever comes last)
-        SectionType_ROCRT_ALIGN_BSSEND  , // TODO: padding after .bss - no good way of telling what's padding and what's not
         // .bss
         SectionType_ZI                  , // .bss
+        SectionType_ROCRT_ALIGN_BSSEND  , // TODO: padding after .bss - no good way of telling what's padding and what's not
 
         SectionType_Count,
     };
@@ -297,8 +297,8 @@ private:
         ".rocrt.align.relroend",
         "RW",
         ".atexit",
-        ".rocrt.align.bssend",
         "ZI",
+        ".rocrt.align.bssend",
     };
 
     struct Context {
@@ -391,7 +391,7 @@ struct Pattern {
 };
 
 // https://github.com/ARM-software/abi-aa/blob/main/sysvabi64/sysvabi64.rst#procedure-linkage-table
-constexpr const std::array<InstructionMask, 8> cPltHeader_NoBti = {{
+static constexpr const std::array<InstructionMask, 8> cPltHeader_NoBti = {{
     { 0xa9bf7bf0u, 0xffffffffu }, // stp x16, x30, [sp, -#0x10]!
     { 0x90000010u, 0x9f00001fu }, // adrp x16, :page:&.got.plt[2]
     { 0xf9400211u, 0xffc003ffu }, // ldr x17, [x16, :lo12:&.got.plt[2]]
@@ -402,7 +402,7 @@ constexpr const std::array<InstructionMask, 8> cPltHeader_NoBti = {{
     { 0xd503201fu, 0xffffffffu }, // nop
 }};
 
-constexpr const std::array<InstructionMask, 9> cPltHeader_Bti = {{
+static constexpr const std::array<InstructionMask, 9> cPltHeader_Bti = {{
     { 0xd503245fu, 0xffffffffu }, // bti c
     { 0xa9bf7bf0u, 0xffffffffu }, // stp x16, x30, [sp, -#0x10]!
     { 0x90000010u, 0x9f00001fu }, // adrp x16, :page:&.got.plt[2]
@@ -414,21 +414,21 @@ constexpr const std::array<InstructionMask, 9> cPltHeader_Bti = {{
     { 0xd503201fu, 0xffffffffu }, // nop
 }};
 
-constexpr const Pattern cPltHeaderMasks[4] = {
+static constexpr const Pattern cPltHeaderMasks[4] = {
     { cPltHeader_NoBti, 2, 3 }, // no BTI, no PAC
     { cPltHeader_Bti  , 3, 4 }, // BTI, no PAC
     { cPltHeader_Bti  , 3, 4 }, // no BTI, PAC
     { cPltHeader_Bti  , 3, 4 }, // BTI, PAC
 };
 
-constexpr const std::array<InstructionMask, 4> cPltEntry_NoBtiNoPac = {{
+static constexpr const std::array<InstructionMask, 4> cPltEntry_NoBtiNoPac = {{
     { 0x90000010u, 0x9f00001fu }, // adrp x16, :page:&.got.plt[index + 3]
     { 0xf9400211u, 0xffc003ffu }, // ldr x17, [x16, :lo12:&.got.plt[index + 3]]
     { 0x91000210u, 0xffc003ffu }, // add x16, x16, :lo12:&.got.plt[index + 3]
     { 0xd61f0220u, 0xffffffffu }, // br x17
 }};
 
-constexpr const std::array<InstructionMask, 5> cPltEntry_BtiNoPac = {{
+static constexpr const std::array<InstructionMask, 5> cPltEntry_BtiNoPac = {{
     { 0xd503245fu, 0xffffffffu }, // bti c
     { 0x90000010u, 0x9f00001fu }, // adrp x16, :page:&.got.plt[index + 3]
     { 0xf9400211u, 0xffc003ffu }, // ldr x17, [x16, :lo12:&.got.plt[index + 3]]
@@ -436,7 +436,7 @@ constexpr const std::array<InstructionMask, 5> cPltEntry_BtiNoPac = {{
     { 0xd61f0220u, 0xffffffffu }, // br x17
 }};
 
-constexpr const std::array<InstructionMask, 5> cPltEntry_NoBtiPac = {{
+static constexpr const std::array<InstructionMask, 5> cPltEntry_NoBtiPac = {{
     { 0x90000010u, 0x9f00001fu }, // adrp x16, :page:&.got.plt[index + 3]
     { 0xf9400211u, 0xffc003ffu }, // ldr x17, [x16, :lo12:&.got.plt[index + 3]]
     { 0x91000210u, 0xffc003ffu }, // add x16, x16, :lo12:&.got.plt[index + 3]
@@ -444,7 +444,7 @@ constexpr const std::array<InstructionMask, 5> cPltEntry_NoBtiPac = {{
     { 0xd61f0220u, 0xffffffffu }, // br x17
 }};
 
-constexpr const std::array<InstructionMask, 6> cPltEntry_BtiPac = {{
+static constexpr const std::array<InstructionMask, 6> cPltEntry_BtiPac = {{
     { 0xd503245fu, 0xffffffffu }, // bti c
     { 0x90000010u, 0x9f00001fu }, // adrp x16, :page:&.got.plt[index + 3]
     { 0xf9400211u, 0xffc003ffu }, // ldr x17, [x16, :lo12:&.got.plt[index + 3]]
@@ -453,7 +453,7 @@ constexpr const std::array<InstructionMask, 6> cPltEntry_BtiPac = {{
     { 0xd61f0220u, 0xffffffffu }, // br x17
 }};
 
-constexpr const Pattern cPltEntryMasks[4] = {
+static constexpr const Pattern cPltEntryMasks[4] = {
     { cPltEntry_NoBtiNoPac, 1, 2 }, // no BTI, no PAC
     { cPltEntry_BtiNoPac  , 1, 2 }, // BTI, no PAC
     { cPltEntry_NoBtiPac  , 2, 3 }, // no BTI, PAC
