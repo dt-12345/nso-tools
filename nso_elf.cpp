@@ -178,7 +178,7 @@ public:
         mHeader.e_ident[EI_CLASS] = ELFCLASS64;
         mHeader.e_ident[EI_DATA] = ELFDATA2LSB;
         mHeader.e_ident[EI_VERSION] = EV_CURRENT;
-        mHeader.e_ident[EI_OSABI] = ELFOSABI_NONE;
+        mHeader.e_ident[EI_OSABI] = ELFOSABI_SYSV;
         mHeader.e_ident[EI_ABIVERSION] = 0;
         mHeader.e_type = ET_DYN;
         mHeader.e_machine = EM_AARCH64;
@@ -211,6 +211,13 @@ private:
     struct ProgBits {
         std::span<const std::uint8_t> data;
         std::size_t align;
+    };
+
+    enum PointerAuthMode : std::uint32_t {
+        AuthNone    = 0,
+        BTI         = 1 << 0,
+        PAC         = 1 << 1,
+        BTI_PAC     = BTI | PAC,
     };
 
     // assumptions based on the layout of official NSOs
@@ -296,29 +303,30 @@ private:
 
     struct Context {
         const NSOFile& nso;
-        std::size_t header_offset;
-        const ModuleHeader* header;
-        std::uint32_t rocrt_version;
+        std::size_t header_offset = 0;
+        const ModuleHeader* header = nullptr;
+        std::uint32_t rocrt_version = 0;
+        std::uint32_t pointer_auth = AuthNone;
         const LibNXExtension* libnx_extension;
-        const Elf64_Dyn* rel;
-        const Elf64_Dyn* rel_size;
-        const Elf64_Dyn* rela;
-        const Elf64_Dyn* rela_size;
-        const Elf64_Dyn* plt_rel;
-        const Elf64_Dyn* plt_rel_size;
-        const Elf64_Dyn* plt_rel_type;
-        const Elf64_Dyn* relr;
-        const Elf64_Dyn* relr_size;
-        const Elf64_Dyn* hash;
-        const Elf64_Dyn* gnu_hash;
-        const Elf64_Dyn* dyn_sym;
-        const Elf64_Dyn* dyn_str;
-        const Elf64_Dyn* dyn_str_size;
-        const Elf64_Dyn* init_array;
-        const Elf64_Dyn* init_array_size;
-        const Elf64_Dyn* fini_array;
-        const Elf64_Dyn* fini_array_size;
-        const Elf64_Dyn* got_plt;
+        const Elf64_Dyn* rel = nullptr;
+        const Elf64_Dyn* rel_size = nullptr;
+        const Elf64_Dyn* rela = nullptr;
+        const Elf64_Dyn* rela_size = nullptr;
+        const Elf64_Dyn* plt_rel = nullptr;
+        const Elf64_Dyn* plt_rel_size = nullptr;
+        const Elf64_Dyn* plt_rel_type = nullptr;
+        const Elf64_Dyn* relr = nullptr;
+        const Elf64_Dyn* relr_size = nullptr;
+        const Elf64_Dyn* hash = nullptr;
+        const Elf64_Dyn* gnu_hash = nullptr;
+        const Elf64_Dyn* dyn_sym = nullptr;
+        const Elf64_Dyn* dyn_str = nullptr;
+        const Elf64_Dyn* dyn_str_size = nullptr;
+        const Elf64_Dyn* init_array = nullptr;
+        const Elf64_Dyn* init_array_size = nullptr;
+        const Elf64_Dyn* fini_array = nullptr;
+        const Elf64_Dyn* fini_array_size = nullptr;
+        const Elf64_Dyn* got_plt = nullptr;
         std::unordered_set<std::uint64_t> relocations{};
         std::size_t plt_rel_index = SHN_UNDEF;
         std::size_t dyn_str_index = SHN_UNDEF;
@@ -367,46 +375,98 @@ static auto Imm12(std::uint32_t value) -> std::uint32_t {
     return value >> 10 & 0xfff;
 }
 
-constexpr const auto cPltResolverInstructionCount = 8;
-constexpr const auto cPltResolverSize = cPltResolverInstructionCount * sizeof(std::uint32_t);
-constexpr const std::uint32_t cPltResolverValues[cPltResolverInstructionCount] = {
-    0xa9bf7bf0u, 0x90000010u, 0xf9400211u, 0x91000210u, 0xd61f0220u, 0xd503201fu, 0xd503201fu, 0xd503201fu,
+struct InstructionMask {
+    std::uint32_t value;
+    std::uint32_t mask;
 };
-constexpr const std::uint32_t cPltResolverMasks[cPltResolverInstructionCount] = {
-    0xffffffffu, 0x9f00001fu, 0xffC003ffu, 0xffc003ffu, 0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu,
-};
-static_assert(sizeof(cPltResolverValues) == cPltResolverSize && sizeof(cPltResolverMasks) == cPltResolverSize);
 
-constexpr const auto cPltEntryInstructionCount = 4;
-constexpr const auto cPltEntrySize = cPltEntryInstructionCount * sizeof(std::uint32_t);
-constexpr const std::uint32_t cPltEntryValues[cPltEntryInstructionCount] = {
-    0x90000010u, 0xf9400211u, 0x91000210u, 0xd61f0220u,
-};
-constexpr const std::uint32_t cPltEntryMasks[cPltEntryInstructionCount] = {
-    0x9f00001fu, 0xffC003ffu, 0xffc003ffu, 0xffffffffu,
-};
-static_assert(sizeof(cPltEntryValues) == cPltEntrySize && sizeof(cPltEntryMasks) == cPltEntrySize);
+struct Pattern {
+    std::span<const InstructionMask> pattern;
+    std::uint32_t ldr_index;
+    std::uint32_t add_index;
 
-static auto MatchPltResolver(std::span<const std::uint8_t> data) -> std::size_t {
-    /*
-        .plt begins with the runtime resolver thunk which has the following form (.got.plt[2] contains the resolver function pointer)
-            stp x16, x30, [sp, -#0x10]!
-            adrp x16, &(.got.plt[2])
-            ldr x17, [x16, :lo12:&(.got.plt[2])]
-            add x16, x16, :lo12:&(.got.plt[2])
-            br x17
-            nop
-            nop
-            nop
-        we need to match this function to find the beginning of the .plt
-    */
-    
+    constexpr auto size_bytes() const -> std::size_t {
+        return pattern.size() * sizeof(std::uint32_t);
+    }
+};
+
+// https://github.com/ARM-software/abi-aa/blob/main/sysvabi64/sysvabi64.rst#procedure-linkage-table
+constexpr const std::array<InstructionMask, 8> cPltHeader_NoBti = {{
+    { 0xa9bf7bf0u, 0xffffffffu }, // stp x16, x30, [sp, -#0x10]!
+    { 0x90000010u, 0x9f00001fu }, // adrp x16, :page &.got.plt[2]
+    { 0xf9400211u, 0xffc003ffu }, // ldr x17, [x16, :lo12:&.got.plt[2]]
+    { 0x91000210u, 0xffc003ffu }, // add x16, x16, :lo12:&.got.plt[2]
+    { 0xd61f0220u, 0xffffffffu }, // br x17
+    { 0xd503201fu, 0xffffffffu }, // nop
+    { 0xd503201fu, 0xffffffffu }, // nop
+    { 0xd503201fu, 0xffffffffu }, // nop
+}};
+
+constexpr const std::array<InstructionMask, 9> cPltHeader_Bti = {{
+    { 0xd503245fu, 0xffffffffu }, // bti c
+    { 0xa9bf7bf0u, 0xffffffffu }, // stp x16, x30, [sp, -#0x10]!
+    { 0x90000010u, 0x9f00001fu }, // adrp x16, :page &.got.plt[2]
+    { 0xf9400211u, 0xffc003ffu }, // ldr x17, [x16, :lo12:&.got.plt[2]]
+    { 0x91000210u, 0xffc003ffu }, // add x16, x16, :lo12:&.got.plt[2]
+    { 0xd61f0220u, 0xffffffffu }, // br x17
+    { 0xd503201fu, 0xffffffffu }, // nop
+    { 0xd503201fu, 0xffffffffu }, // nop
+    { 0xd503201fu, 0xffffffffu }, // nop
+}};
+
+constexpr const Pattern cPltHeaderMasks[4] = {
+    { cPltHeader_NoBti, 2, 3 }, // no BTI, no PAC
+    { cPltHeader_Bti  , 3, 4 }, // BTI, no PAC
+    { cPltHeader_Bti  , 3, 4 }, // no BTI, PAC
+    { cPltHeader_Bti  , 3, 4 }, // BTI, PAC
+};
+
+constexpr const std::array<InstructionMask, 4> cPltEntry_NoBtiNoPac = {{
+    { 0x90000010u, 0x9f00001fu }, // adrp x16, :page:&.got.plt[index + 3]
+    { 0xf9400211u, 0xffc003ffu }, // ldr x17, [x16, :lo12:&.got.plt[index + 3]]
+    { 0x91000210u, 0xffc003ffu }, // add x16, x16, :lo12:&.got.plt[index + 3]
+    { 0xd61f0220u, 0xffffffffu }, // br x17
+}};
+
+constexpr const std::array<InstructionMask, 5> cPltEntry_BtiNoPac = {{
+    { 0xd503245fu, 0xffffffffu }, // bti c
+    { 0x90000010u, 0x9f00001fu }, // adrp x16, :page:&.got.plt[index + 3]
+    { 0xf9400211u, 0xffc003ffu }, // ldr x17, [x16, :lo12:&.got.plt[index + 3]]
+    { 0x91000210u, 0xffc003ffu }, // add x16, x16, :lo12:&.got.plt[index + 3]
+    { 0xd61f0220u, 0xffffffffu }, // br x17
+}};
+
+constexpr const std::array<InstructionMask, 5> cPltEntry_NoBtiPac = {{
+    { 0x90000010u, 0x9f00001fu }, // adrp x16, :page:&.got.plt[index + 3]
+    { 0xf9400211u, 0xffc003ffu }, // ldr x17, [x16, :lo12:&.got.plt[index + 3]]
+    { 0x91000210u, 0xffc003ffu }, // add x16, x16, :lo12:&.got.plt[index + 3]
+    { 0xd503219fu, 0xffffffffu }, // autia1716
+    { 0xd61f0220u, 0xffffffffu }, // br x17
+}};
+
+constexpr const std::array<InstructionMask, 6> cPltEntry_BtiPac = {{
+    { 0xd503245fu, 0xffffffffu }, // bti c
+    { 0x90000010u, 0x9f00001fu }, // adrp x16, :page:&.got.plt[index + 3]
+    { 0xf9400211u, 0xffc003ffu }, // ldr x17, [x16, :lo12:&.got.plt[index + 3]]
+    { 0x91000210u, 0xffc003ffu }, // add x16, x16, :lo12:&.got.plt[index + 3]
+    { 0xd503219fu, 0xffffffffu }, // autia1716
+    { 0xd61f0220u, 0xffffffffu }, // br x17
+}};
+
+constexpr const Pattern cPltEntryMasks[4] = {
+    { cPltEntry_NoBtiNoPac, 1, 2 }, // no BTI, no PAC
+    { cPltEntry_BtiNoPac  , 1, 2 }, // BTI, no PAC
+    { cPltEntry_NoBtiPac  , 2, 3 }, // no BTI, PAC
+    { cPltEntry_BtiPac    , 2, 3 }, // BTI, PAC
+};
+
+static auto MatchPltHeader(std::span<const std::uint8_t> data, const Pattern& pattern) -> std::size_t {    
     std::size_t offset = 0;
-    while (offset + cPltResolverSize <= data.size()) {
+    while (offset + pattern.size_bytes() <= data.size()) {
         const auto instructions = reinterpret_cast<const std::uint32_t*>(data.data() + offset);
         bool matched = true;
-        for (std::size_t i = 0; i < cPltResolverInstructionCount; ++i) {
-            if ((instructions[i] & cPltResolverMasks[i]) != cPltResolverValues[i]) {
+        for (std::size_t i = 0; i < pattern.pattern.size(); ++i) {
+            if ((instructions[i] & pattern.pattern[i].mask) != pattern.pattern[i].value) {
                 matched = false;
                 break;
             }
@@ -414,8 +474,8 @@ static auto MatchPltResolver(std::span<const std::uint8_t> data) -> std::size_t 
 
         if (matched) {
             // verify ldr and add are using the same offset
-            const auto ldr_offset = Imm12(instructions[2]) * 8;
-            const auto add_offset = Imm12(instructions[3]);
+            const auto ldr_offset = Imm12(instructions[pattern.ldr_index]) * 8;
+            const auto add_offset = Imm12(instructions[pattern.add_index]);
 
             if (ldr_offset == add_offset) {
                 return offset;
@@ -428,23 +488,13 @@ static auto MatchPltResolver(std::span<const std::uint8_t> data) -> std::size_t 
     return std::numeric_limits<std::size_t>::max();
 }
 
-static auto MatchAllPltEntries(std::span<const std::uint8_t> data) -> std::size_t {
-    /*
-        once we have the start of the .plt, then we need to match .plt entries of the following form
-            adrp x16, &(.got.plt[index])
-            ldr x17, [x16, :lo12:&(.got.plt[index])]
-            add x16, x16, :lo12:&(.got.plt[index])
-            br x17
-        this should extend until the end of the executable region (unless someone decided to do something funky with their linker script)
-            TODO: turns out some games do have code after .plt - is this another section or just weird ordering?
-    */
-
+static auto MatchAllPltEntries(std::span<const std::uint8_t> data, const Pattern& pattern) -> std::size_t {
     std::size_t offset = 0;
-    while (offset + cPltEntrySize <= data.size()) {
+    while (offset + pattern.size_bytes() <= data.size()) {
         const auto instructions = reinterpret_cast<const std::uint32_t*>(data.data() + offset);
         bool matched = true;
-        for (std::size_t i = 0; i < cPltEntryInstructionCount; ++i) {
-            if ((instructions[i] & cPltEntryMasks[i]) != cPltEntryValues[i]) {
+        for (std::size_t i = 0; i < pattern.pattern.size(); ++i) {
+            if ((instructions[i] & pattern.pattern[i].mask) != pattern.pattern[i].value) {
                 matched = false;
                 break;
             }
@@ -455,14 +505,14 @@ static auto MatchAllPltEntries(std::span<const std::uint8_t> data) -> std::size_
         }
 
         // verify ldr and add are using the same offset
-        const auto ldr_offset = Imm12(instructions[1]) * 8;
-        const auto add_offset = Imm12(instructions[2]);
+        const auto ldr_offset = Imm12(instructions[pattern.ldr_index]) * 8;
+        const auto add_offset = Imm12(instructions[pattern.add_index]);
 
         if (ldr_offset != add_offset) {
             break;
         }
 
-        offset += cPltEntrySize;
+        offset += pattern.size_bytes();
     }
 
     return offset;
@@ -712,7 +762,8 @@ auto ELFBuilder::splitText(Context& ctx) -> void {
     }
     
     // EX
-    const auto plt_begin = MatchPltResolver(segment_data);
+    const auto& header_pat = cPltHeaderMasks[ctx.pointer_auth];
+    const auto plt_begin = MatchPltHeader(segment_data, header_pat);
     if (plt_begin == std::numeric_limits<std::size_t>::max()) {
         // if no .plt found, then assign the entire executable region to .text
         auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_EX]);
@@ -738,19 +789,23 @@ auto ELFBuilder::splitText(Context& ctx) -> void {
     }
 
     // .plt
-    const auto total_entry_size = MatchAllPltEntries(std::span(segment_data).subspan(plt_begin + cPltResolverSize));
+    const auto total_entry_size = MatchAllPltEntries(
+        std::span(segment_data).subspan(plt_begin + header_pat.size_bytes()),
+        cPltEntryMasks[ctx.pointer_auth]
+    );
     auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_PLT]);
     shdr.sh_flags = SHF_ALLOC | SHF_EXECINSTR | 2 << 0x1c; // not sure what the SHF_MASKPROC flags are here
     shdr.sh_addr = ctx.nso.getTextOffset() + plt_begin;
     shdr.sh_offset = mPhdrs[Segment_Text].p_offset + plt_begin;
-    shdr.sh_size = cPltResolverSize + total_entry_size;
+    shdr.sh_size = header_pat.size_bytes() + total_entry_size;
     shdr.sh_link = 0;
     shdr.sh_info = 0;
     shdr.sh_addralign = 1 << 4;
     shdr.sh_entsize = 0;
 
-    const auto total_size = plt_begin + cPltResolverSize + total_entry_size;
+    const auto total_size = plt_begin + header_pat.size_bytes() + total_entry_size;
     if (segment_data.size() > total_size) {
+        // TODO: some games have functions after the end of the PLT, is this another section?
         auto& shdr = addSection(SHT_PROGBITS, ".text.1");
         shdr.sh_flags = SHF_ALLOC | SHF_EXECINSTR;
         shdr.sh_addr = ctx.nso.getTextOffset() + total_size;
@@ -1719,6 +1774,8 @@ auto ELFBuilder::splitSections(const NSOFile& nso) -> void {
             case DT_FINI_ARRAY: ctx.fini_array = std::addressof(dyn); break;
             case DT_FINI_ARRAYSZ: ctx.fini_array_size = std::addressof(dyn); break;
             case DT_PLTGOT: ctx.got_plt = std::addressof(dyn); break;
+            case DT_AARCH64_BTI_PLT: ctx.pointer_auth |= BTI; break;
+            case DT_AARCH64_PAC_PLT: ctx.pointer_auth |= PAC; break;
         }
     }
 
