@@ -393,7 +393,7 @@ struct Pattern {
 // https://github.com/ARM-software/abi-aa/blob/main/sysvabi64/sysvabi64.rst#procedure-linkage-table
 constexpr const std::array<InstructionMask, 8> cPltHeader_NoBti = {{
     { 0xa9bf7bf0u, 0xffffffffu }, // stp x16, x30, [sp, -#0x10]!
-    { 0x90000010u, 0x9f00001fu }, // adrp x16, :page &.got.plt[2]
+    { 0x90000010u, 0x9f00001fu }, // adrp x16, :page:&.got.plt[2]
     { 0xf9400211u, 0xffc003ffu }, // ldr x17, [x16, :lo12:&.got.plt[2]]
     { 0x91000210u, 0xffc003ffu }, // add x16, x16, :lo12:&.got.plt[2]
     { 0xd61f0220u, 0xffffffffu }, // br x17
@@ -405,7 +405,7 @@ constexpr const std::array<InstructionMask, 8> cPltHeader_NoBti = {{
 constexpr const std::array<InstructionMask, 9> cPltHeader_Bti = {{
     { 0xd503245fu, 0xffffffffu }, // bti c
     { 0xa9bf7bf0u, 0xffffffffu }, // stp x16, x30, [sp, -#0x10]!
-    { 0x90000010u, 0x9f00001fu }, // adrp x16, :page &.got.plt[2]
+    { 0x90000010u, 0x9f00001fu }, // adrp x16, :page:&.got.plt[2]
     { 0xf9400211u, 0xffc003ffu }, // ldr x17, [x16, :lo12:&.got.plt[2]]
     { 0x91000210u, 0xffc003ffu }, // add x16, x16, :lo12:&.got.plt[2]
     { 0xd61f0220u, 0xffffffffu }, // br x17
