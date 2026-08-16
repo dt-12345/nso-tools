@@ -259,7 +259,7 @@ private:
         SectionType_ATEXIT              , // .rel.dyn or .rela.dyn relocations after .got/.got.plt/.init_array/.fini_array (whichever comes last)
         // .bss
         SectionType_ZI                  , // .bss
-        SectionType_ROCRT_ALIGN_BSSEND  , // TODO: padding after .bss - no good way of telling what's padding and what's not
+        SectionType_ROCRT_ALIGN_BSSEND  , // whatever is after .bss
 
         SectionType_Count,
     };
@@ -340,6 +340,10 @@ private:
         mSectionNames.push_back('\0');
         shdr.sh_type = type;
         return shdr;
+    }
+
+    auto addSection(Elf64_Word type, SectionType section_type) -> Elf64_Shdr& {
+        return addSection(type, cSectionNames[section_type]);
     }
 
     auto addNullSection() -> void {
@@ -766,7 +770,7 @@ auto ELFBuilder::splitText(Context& ctx) -> void {
     const auto plt_begin = MatchPltHeader(segment_data, header_pat);
     if (plt_begin == std::numeric_limits<std::size_t>::max()) {
         // if no .plt found, then assign the entire executable region to .text
-        auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_EX]);
+        auto& shdr = addSection(SHT_PROGBITS, SectionType_EX);
         shdr.sh_flags = SHF_ALLOC | SHF_EXECINSTR;
         shdr.sh_addr = ctx.nso.getTextOffset();
         shdr.sh_offset = mPhdrs[Segment_Text].p_offset;
@@ -777,7 +781,7 @@ auto ELFBuilder::splitText(Context& ctx) -> void {
         shdr.sh_entsize = 0;
         return;
     } else {
-        auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_EX]);
+        auto& shdr = addSection(SHT_PROGBITS, SectionType_EX);
         shdr.sh_flags = SHF_ALLOC | SHF_EXECINSTR;
         shdr.sh_addr = ctx.nso.getTextOffset();
         shdr.sh_offset = mPhdrs[Segment_Text].p_offset;
@@ -793,7 +797,7 @@ auto ELFBuilder::splitText(Context& ctx) -> void {
         std::span(segment_data).subspan(plt_begin + header_pat.size_bytes()),
         cPltEntryMasks[ctx.pointer_auth]
     );
-    auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_PLT]);
+    auto& shdr = addSection(SHT_PROGBITS, SectionType_PLT);
     shdr.sh_flags = SHF_ALLOC | SHF_EXECINSTR | 2 << 0x1c; // not sure what the SHF_MASKPROC flags are here
     shdr.sh_addr = ctx.nso.getTextOffset() + plt_begin;
     shdr.sh_offset = mPhdrs[Segment_Text].p_offset + plt_begin;
@@ -830,7 +834,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
 
         const auto rocrt_init = reinterpret_cast<const RocrtInit*>(segment_data.data());
         if (rocrt_init->entry == 1) { // failsafe for unofficial NSOs that pass the rocrt version check but don't actually have this section
-            auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_ROCRT_INITRO]);
+            auto& shdr = addSection(SHT_PROGBITS, SectionType_ROCRT_INITRO);
             shdr.sh_flags = SHF_ALLOC;
             shdr.sh_addr = ctx.nso.getRodataOffset();
             shdr.sh_offset = start_offset;
@@ -861,7 +865,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
             Panic(".nx_debuglink must be in .rodata");
         }
 
-        auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_NX_DEBUGLINK]);
+        auto& shdr = addSection(SHT_PROGBITS, SectionType_NX_DEBUGLINK);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = range->start;
         shdr.sh_offset = start_offset + range->start - ctx.nso.getRodataOffset();
@@ -880,7 +884,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
             Panic(".rocrt.info must be in .rodata");
         }
 
-        auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_ROCRT_INFO]);
+        auto& shdr = addSection(SHT_PROGBITS, SectionType_ROCRT_INFO);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = ctx.header_offset;
         shdr.sh_offset = start_offset + ctx.header_offset - ctx.nso.getRodataOffset();
@@ -913,7 +917,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         const auto rodata_offset = ctx.rel->d_un.d_ptr - ctx.nso.getRodataOffset();
 
         rel_index = mShdrs.size();
-        auto& shdr = addSection(SHT_REL, cSectionNames[SectionType_REL_DYN]);
+        auto& shdr = addSection(SHT_REL, SectionType_REL_DYN);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = ctx.rel->d_un.d_ptr;
         shdr.sh_offset = start_offset + rodata_offset;
@@ -938,7 +942,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         const auto rodata_offset = ctx.rela->d_un.d_ptr - ctx.nso.getRodataOffset();
 
         rela_index = mShdrs.size();
-        auto& shdr = addSection(SHT_RELA, cSectionNames[SectionType_RELA_DYN]);
+        auto& shdr = addSection(SHT_RELA, SectionType_RELA_DYN);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = ctx.rela->d_un.d_ptr;
         shdr.sh_offset = start_offset + rodata_offset;
@@ -964,7 +968,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
                 }
 
                 ctx.plt_rel_index = mShdrs.size();
-                auto& shdr = addSection(SHT_REL, cSectionNames[SectionType_REL_PLT]);
+                auto& shdr = addSection(SHT_REL, SectionType_REL_PLT);
                 shdr.sh_flags = SHF_ALLOC; // add SHF_INFO_LINK later if .got.plt exists
                 shdr.sh_addr = ctx.plt_rel->d_un.d_ptr;
                 shdr.sh_offset = start_offset + rodata_offset;
@@ -987,7 +991,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
                 }
 
                 ctx.plt_rel_index = mShdrs.size();
-                auto& shdr = addSection(SHT_RELA, cSectionNames[SectionType_RELA_PLT]);
+                auto& shdr = addSection(SHT_RELA, SectionType_RELA_PLT);
                 shdr.sh_flags = SHF_ALLOC; // add SHF_INFO_LINK later if .got.plt exists
                 shdr.sh_addr = ctx.plt_rel->d_un.d_ptr;
                 shdr.sh_offset = start_offset + rodata_offset;
@@ -1016,7 +1020,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
 
         const auto rodata_offset = ctx.relr->d_un.d_ptr - ctx.nso.getRodataOffset();
 
-        auto& shdr = addSection(SHT_RELR, cSectionNames[SectionType_RELR_DYN]);
+        auto& shdr = addSection(SHT_RELR, SectionType_RELR_DYN);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = ctx.relr->d_un.d_ptr;
         shdr.sh_offset = start_offset + rodata_offset;
@@ -1063,7 +1067,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         }
 
         hash_index = mShdrs.size();
-        auto& shdr = addSection(SHT_HASH, cSectionNames[SectionType_HASH]);
+        auto& shdr = addSection(SHT_HASH, SectionType_HASH);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = ctx.hash->d_un.d_ptr;
         shdr.sh_offset = start_offset + ctx.hash->d_un.d_ptr - ctx.nso.getRodataOffset();
@@ -1120,7 +1124,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         }
 
         gnu_hash_index = mShdrs.size();
-        auto& shdr = addSection(SHT_GNU_HASH, cSectionNames[SectionType_GNU_HASH]);
+        auto& shdr = addSection(SHT_GNU_HASH, SectionType_GNU_HASH);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = ctx.gnu_hash->d_un.d_ptr;
         shdr.sh_offset = start_offset + base_offset;
@@ -1141,7 +1145,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         }
 
         dyn_sym_index = mShdrs.size();
-        auto& shdr = addSection(SHT_DYNSYM, cSectionNames[SectionType_DYN_SYM]);
+        auto& shdr = addSection(SHT_DYNSYM, SectionType_DYN_SYM);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = ctx.dyn_sym->d_un.d_ptr;
         shdr.sh_offset = start_offset + ctx.dyn_sym->d_un.d_ptr - ctx.nso.getRodataOffset();
@@ -1167,7 +1171,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         }
 
         ctx.dyn_str_index = mShdrs.size();
-        auto& shdr = addSection(SHT_STRTAB, cSectionNames[SectionType_DYN_STR]);
+        auto& shdr = addSection(SHT_STRTAB, SectionType_DYN_STR);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = ctx.dyn_str->d_un.d_ptr;
         shdr.sh_offset = start_offset + ctx.dyn_str->d_un.d_ptr - ctx.nso.getRodataOffset();
@@ -1209,7 +1213,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
             Panic("Invalid .eh_frame_hdr range");
         }
 
-        auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_EH_FRAME_HDR]);
+        auto& shdr = addSection(SHT_PROGBITS, SectionType_EH_FRAME_HDR);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = eh_frame_hdr_start;
         shdr.sh_offset = start_offset + eh_frame_hdr_start - ctx.nso.getRodataOffset();
@@ -1259,7 +1263,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
 
         exception_handling_end = std::max(eh_frame_offset + frame_size, exception_handling_end);
 
-        auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_EH_FRAME]);
+        auto& shdr = addSection(SHT_PROGBITS, SectionType_EH_FRAME);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = eh_frame_offset;
         shdr.sh_offset = start_offset + eh_frame_offset - ctx.nso.getRodataOffset();
@@ -1276,7 +1280,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
             Panic(".gcc_except_table must be .rodata");
         }
 
-        auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_GCC_EXCEPT_TABLE]);
+        auto& shdr = addSection(SHT_PROGBITS, SectionType_GCC_EXCEPT_TABLE);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = lsda_range->start;
         shdr.sh_offset = start_offset + lsda_range->start - ctx.nso.getRodataOffset();
@@ -1293,7 +1297,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
     if (max_offset < ro_end && ctx.nso.isInRodata(max_offset)) {
         const auto ro_size = ro_end - max_offset;
         
-        auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_RO]);
+        auto& shdr = addSection(SHT_PROGBITS, SectionType_RO);
         shdr.sh_flags = SHF_ALLOC | SHF_MERGE | SHF_STRINGS;
         shdr.sh_addr = max_offset;
         shdr.sh_offset = start_offset + max_offset - ctx.nso.getRodataOffset();
@@ -1322,7 +1326,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
             Panic(".api_info must be in .rodata");
         }
 
-        auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_API_INFO]);
+        auto& shdr = addSection(SHT_PROGBITS, SectionType_API_INFO);
         shdr.sh_flags = SHF_ALLOC | SHF_STRINGS;
         shdr.sh_addr = start;
         shdr.sh_offset = start_offset + start - ctx.nso.getRodataOffset();
@@ -1337,7 +1341,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
             Panic(".api_info must be in .rodata");
         }
 
-        auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_API_INFO]);
+        auto& shdr = addSection(SHT_PROGBITS, SectionType_API_INFO);
         shdr.sh_flags = SHF_ALLOC | SHF_STRINGS;
         shdr.sh_addr = exception_handling_end;
         shdr.sh_offset = start_offset + exception_handling_end - ctx.nso.getRodataOffset();
@@ -1350,7 +1354,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
 
     // .note.gnu.build-id
     if (ctx.nso.isInRodata(build_id_range->start, build_id_range->size)) {
-        auto& shdr = addSection(SHT_NOTE, cSectionNames[SectionType_GNU_BUILDID]);
+        auto& shdr = addSection(SHT_NOTE, SectionType_GNU_BUILDID);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = build_id_range->start;
         shdr.sh_offset = start_offset + build_id_range->start - ctx.nso.getRodataOffset();
@@ -1366,7 +1370,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
     if (unofficial_ro_layout) {
         std::cerr << "[WARNING] Unofficial .rodata layout detected\n";
         // TODO: how do we fill out RO for these NSOs? (we could just leave it out)
-        // auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_RO]);
+        // auto& shdr = addSection(SHT_PROGBITS, SectionType_RO);
         // shdr.sh_flags = SHF_ALLOC | SHF_MERGE | SHF_STRINGS;
         // shdr.sh_addr = ctx.nso.getRodataOffset();
         // shdr.sh_offset = start_offset;
@@ -1389,7 +1393,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
             Panic(".init_array must be in .data");
         }
 
-        auto& shdr = addSection(SHT_INIT_ARRAY, cSectionNames[SectionType_INIT_ARRAY]);
+        auto& shdr = addSection(SHT_INIT_ARRAY, SectionType_INIT_ARRAY);
         shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
         shdr.sh_addr = ctx.init_array->d_un.d_ptr;
         shdr.sh_offset = start_offset + ctx.init_array->d_un.d_ptr - ctx.nso.getDataOffset();
@@ -1409,7 +1413,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
             Panic(".fini_array must be in .data");
         }
 
-        auto& shdr = addSection(SHT_FINI_ARRAY, cSectionNames[SectionType_FINI_ARRAY]);
+        auto& shdr = addSection(SHT_FINI_ARRAY, SectionType_FINI_ARRAY);
         shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
         shdr.sh_addr = ctx.fini_array->d_un.d_ptr;
         shdr.sh_offset = start_offset + ctx.fini_array->d_un.d_ptr - ctx.nso.getDataOffset();
@@ -1431,7 +1435,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
             Panic(".dynamic must be in .data");
         }
 
-        auto& shdr = addSection(SHT_DYNAMIC, cSectionNames[SectionType_DYNAMIC]);
+        auto& shdr = addSection(SHT_DYNAMIC, SectionType_DYNAMIC);
         shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
         shdr.sh_addr = dyn_range->start;
         shdr.sh_offset = start_offset + dyn_range->start - ctx.nso.getDataOffset();
@@ -1460,7 +1464,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
         }
 
         const auto index = mShdrs.size();
-        auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_GOT_PLT]);
+        auto& shdr = addSection(SHT_PROGBITS, SectionType_GOT_PLT);
         shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
         shdr.sh_addr = ctx.got_plt->d_un.d_ptr;
         shdr.sh_offset = start_offset + ctx.got_plt->d_un.d_ptr - ctx.nso.getDataOffset();
@@ -1493,7 +1497,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
             Panic(".got must be in .data");
         }
 
-        auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_GOT]);
+        auto& shdr = addSection(SHT_PROGBITS, SectionType_GOT);
         shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
         shdr.sh_addr = ctx.libnx_extension->got_start;
         shdr.sh_offset = start_offset + ctx.libnx_extension->got_start - ctx.nso.getDataOffset();
@@ -1529,7 +1533,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
         }
 
         if (got_end - got_start > 0) {
-            auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_GOT]);
+            auto& shdr = addSection(SHT_PROGBITS, SectionType_GOT);
             shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
             shdr.sh_addr = got_start;
             shdr.sh_offset = start_offset + got_start - ctx.nso.getDataOffset();
@@ -1573,7 +1577,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
         }
 
         if (got_end > got_start) {
-            auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_GOT]);
+            auto& shdr = addSection(SHT_PROGBITS, SectionType_GOT);
             shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
             shdr.sh_addr = got_start;
             shdr.sh_offset = start_offset + got_start - ctx.nso.getDataOffset();
@@ -1612,7 +1616,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
         }
 
         if (max_reloc > min_reloc) {
-            auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_ATEXIT]);
+            auto& shdr = addSection(SHT_PROGBITS, SectionType_ATEXIT);
             shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
             shdr.sh_addr = min_reloc;
             shdr.sh_offset = start_offset + min_reloc - ctx.nso.getDataOffset();
@@ -1656,7 +1660,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
         }
 
         if (max_reloc > min_reloc) {
-            auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_DATA_REL_RO]);
+            auto& shdr = addSection(SHT_PROGBITS, SectionType_DATA_REL_RO);
             shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
             shdr.sh_addr = min_reloc;
             shdr.sh_offset = start_offset + min_reloc - ctx.nso.getDataOffset();
@@ -1680,7 +1684,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
         }
 
         if (min_offset != std::numeric_limits<std::size_t>::max() && min_offset > ctx.nso.getDataOffset()) {
-            auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_RW]);
+            auto& shdr = addSection(SHT_PROGBITS, SectionType_RW);
             shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
             shdr.sh_addr = ctx.nso.getDataOffset();
             shdr.sh_offset = start_offset;
@@ -1705,20 +1709,20 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
         // .rocrt.align.relroend
         if (rw_start != max_offset) {
             const auto offset = max_offset - ctx.nso.getDataOffset();
-            auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_ROCRT_ALIGN_RELROEND]);
+            auto& shdr = addSection(SHT_PROGBITS, SectionType_ROCRT_ALIGN_RELROEND);
             shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
             shdr.sh_addr = max_offset;
             shdr.sh_offset = start_offset + offset;
             shdr.sh_size = rw_start - max_offset;
             shdr.sh_link = 0;
             shdr.sh_info = 0;
-            shdr.sh_addralign = 1 << 2;
+            shdr.sh_addralign = 1;
             shdr.sh_entsize = 0;
         }
 
         if (ctx.nso.isInData(rw_start)) {
             const auto data_offset = rw_start - ctx.nso.getDataOffset();
-            auto& shdr = addSection(SHT_PROGBITS, cSectionNames[SectionType_RW]);
+            auto& shdr = addSection(SHT_PROGBITS, SectionType_RW);
             shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
             shdr.sh_addr = rw_start;
             shdr.sh_offset = start_offset + data_offset;
@@ -1732,17 +1736,39 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
 }
 
 auto ELFBuilder::splitBss(Context& ctx) -> void {
-    // ZI
-    if (ctx.nso.getBssSize() > 0) {
-        auto& shdr = addSection(SHT_NOBITS, cSectionNames[SectionType_ZI]);
+    const auto totalBssSize = ctx.nso.getBssSize();
+    if (totalBssSize > 0) {
+        auto trueBssSize = totalBssSize;
+        if (ctx.header->bss_end > ctx.header->bss_start) {
+            trueBssSize = static_cast<std::size_t>(ctx.header->bss_end - ctx.header->bss_start);
+            if (trueBssSize > totalBssSize) {
+                Panic("Module header has an out-of-range .bss size");
+            }
+        }
+
+        // ZI
+        auto& shdr = addSection(SHT_NOBITS, SectionType_ZI);
         shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
         shdr.sh_addr = ctx.nso.getBssOffset();
         shdr.sh_offset = mPhdrs[Segment_Data].p_offset + mPhdrs[Segment_Data].p_filesz;
-        shdr.sh_size = ctx.nso.getBssSize();
+        shdr.sh_size = trueBssSize;
         shdr.sh_link = 0;
         shdr.sh_info = 0;
         shdr.sh_addralign = 1 << 2;
         shdr.sh_entsize = 0;
+
+        // .rocrt.align.bssend
+        if (trueBssSize < totalBssSize) {
+            auto& shdr = addSection(SHT_NOBITS, SectionType_ROCRT_ALIGN_BSSEND);
+            shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
+            shdr.sh_addr = ctx.nso.getBssOffset() + trueBssSize;
+            shdr.sh_offset = mPhdrs[Segment_Data].p_offset + mPhdrs[Segment_Data].p_filesz + trueBssSize;
+            shdr.sh_size = totalBssSize - trueBssSize;
+            shdr.sh_link = 0;
+            shdr.sh_info = 0;
+            shdr.sh_addralign = 1;
+            shdr.sh_entsize = 0;
+        }
     }
 }
 

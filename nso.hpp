@@ -81,9 +81,9 @@ struct RocrtInit {
 
 struct ModuleHeader {
     std::uint32_t signature;
-    std::int32_t dynamic_offset;
-    std::int32_t bss_start;
-    std::int32_t bss_end;
+    std::uint32_t dynamic_offset;
+    std::uint32_t bss_start;
+    std::uint32_t bss_end;
     std::int32_t eh_frame_hdr_start;
     std::int32_t eh_frame_hdr_end;
     std::int32_t ro_module_offset;
@@ -305,7 +305,7 @@ private:
     Range mDynSym = {};
 };
 
-inline auto GetRocrtVersion(const RocrtInit* rocrt) -> std::uint32_t{
+inline auto GetRocrtVersion(const RocrtInit* rocrt) -> std::uint32_t {
     switch (rocrt->entry) {
         // rtld entrypoints
         case 0xea000000: // b #0x8 (arm)
