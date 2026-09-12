@@ -84,12 +84,12 @@ struct ModuleHeader {
     std::uint32_t dynamic_offset;
     std::uint32_t bss_start;
     std::uint32_t bss_end;
-    std::int32_t eh_frame_hdr_start;
-    std::int32_t eh_frame_hdr_end;
-    std::int32_t ro_module_offset;
+    std::uint32_t eh_frame_hdr_start;
+    std::uint32_t eh_frame_hdr_end;
+    std::uint32_t ro_module_offset;
     // new versions only
-    std::int32_t relro_start;
-    std::int32_t full_relro_end;
+    std::uint32_t relro_start;
+    std::uint32_t full_relro_end;
     std::int32_t nx_debuglink_start;
     std::int32_t nx_debuglink_end;
     std::int32_t gnu_buildid_start;
