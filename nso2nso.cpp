@@ -1,4 +1,4 @@
-#include "nso.hpp"
+#include "nxo.hpp"
 
 #include <cstdint>
 #include <iostream>
@@ -195,16 +195,16 @@ auto main(std::int32_t argc, const char** argv) -> std::int32_t {
         }
     }
 
-    NSOFile()
+    NXOFile()
         .loadNSO(path, no_validate)
-        .unsetFlag(TextCompress, no_compress_text)
-        .unsetFlag(RoCompress, no_compress_ro)
-        .unsetFlag(DataCompress, no_compress_data)
-        .unsetFlag(TextHash, no_verify_text)
-        .unsetFlag(RoHash, no_verify_ro)
-        .unsetFlag(DataHash, no_verify_data)
-        .setFlag(ExecuteOnlyMemory, execute_only)
-        .setFlag(UseZbicCompression, use_zstd_for_text)
+        .unsetFlag(NXOFile::TextCompress, no_compress_text)
+        .unsetFlag(NXOFile::RoCompress, no_compress_ro)
+        .unsetFlag(NXOFile::DataCompress, no_compress_data)
+        .unsetFlag(NXOFile::TextHash, no_verify_text)
+        .unsetFlag(NXOFile::RoHash, no_verify_ro)
+        .unsetFlag(NXOFile::DataHash, no_verify_data)
+        .setFlag(NXOFile::ExecuteOnlyMemory, execute_only)
+        .setFlag(NXOFile::UseZbicCompression, use_zstd_for_text)
         .saveNSO(outpath, module_name, module_id);
 
     return 0;

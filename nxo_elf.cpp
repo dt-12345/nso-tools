@@ -1,4 +1,4 @@
-#include "nso.hpp"
+#include "nxo.hpp"
 
 #include "elf.h"
 
@@ -199,7 +199,7 @@ public:
         addNullSection();
     }
 
-    auto build(const NSOFile& nso) -> void;
+    auto build(const NXOFile& nso) -> void;
     auto write(std::string_view path) const -> void;
 
 private:
@@ -270,7 +270,7 @@ private:
         ".plt",
         ".rocrt.initro",
         ".nx_debuglink",
-        ".rocrt.info",
+        ".rocrt.info",      // this used to be .rocrt_nro.info for NROs
         ".rel.dyn",
         ".rela.dyn",
         ".rel.plt",
@@ -302,7 +302,7 @@ private:
     };
 
     struct Context {
-        const NSOFile& nso;
+        const NXOFile& nso;
         std::size_t header_offset = 0;
         const ModuleHeader* header = nullptr;
         std::uint32_t rocrt_version = 0;
@@ -362,7 +362,7 @@ private:
         mProgBits.emplace_back(data, align);
     }
 
-    auto splitSections(const NSOFile& nso) -> void;
+    auto splitSections(const NXOFile& nso) -> void;
     auto splitText(Context& ctx) -> void;
     auto splitRodata(Context& ctx) -> void;
     auto splitData(Context& ctx) -> void;
@@ -523,7 +523,7 @@ static auto MatchAllPltEntries(std::span<const std::uint8_t> data, const Pattern
 }
 
 static auto ReadEhFrame(
-    const NSOFile& nso,
+    const NXOFile& nso,
     std::span<const std::uint8_t> data,
     std::size_t eh_frame_hdr_start,
     std::size_t eh_frame_start,
@@ -1772,7 +1772,7 @@ auto ELFBuilder::splitBss(Context& ctx) -> void {
     }
 }
 
-auto ELFBuilder::splitSections(const NSOFile& nso) -> void {
+auto ELFBuilder::splitSections(const NXOFile& nso) -> void {
     auto ctx = Context{
         .nso = nso
     };
@@ -1811,7 +1811,7 @@ auto ELFBuilder::splitSections(const NSOFile& nso) -> void {
     splitBss(ctx);
 }
 
-auto ELFBuilder::build(const NSOFile& nso) -> void {
+auto ELFBuilder::build(const NXOFile& nso) -> void {
     std::size_t current_file_offset = (sizeof(mHeader) + cProgramAlign - 1) / cProgramAlign * cProgramAlign;
     std::size_t current_virt_offset = 0;
     std::size_t current_phys_offset = 0;
@@ -1827,7 +1827,7 @@ auto ELFBuilder::build(const NSOFile& nso) -> void {
         phdr.p_align = cProgramAlign;
         switch (segment) {
             case Segment_Text:
-                if (nso.isFlagSet(ExecuteOnlyMemory)) {
+                if (nso.isFlagSet(NXOFile::ExecuteOnlyMemory)) {
                     phdr.p_flags = PF_X;
                 } else {
                     phdr.p_flags = PF_R | PF_X;
@@ -1907,7 +1907,7 @@ auto ELFBuilder::write(std::string_view path) const -> void {
     file.write(reinterpret_cast<const char*>(mShdrs.data()), mShdrs.size() * sizeof(Elf64_Shdr));
 }
 
-auto NSOFile::saveELF(std::string_view path) -> NSOFile& {
+auto NXOFile::saveELF(std::string_view path) -> NXOFile& {
     auto builder = ELFBuilder();
     builder.build(*this);
     builder.write(path.empty() ? mName + ".nss" : path);

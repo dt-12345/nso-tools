@@ -5,9 +5,9 @@
 auto main(std::int32_t argc, const char** argv) -> std::int32_t {
     constexpr auto print_usage = []() -> void {
         std::cout
-            << "nso2elf\n"
+            << "nro2elf\n"
             << "  Usage:\n"
-            << "    nso2elf <options> path_to_nso\n"
+            << "    nro2elf <options> path_to_nso\n"
             << "\n"
             << "  Basic Options\n"
             << "    --help, -h              print help message\n"
@@ -71,7 +71,7 @@ auto main(std::int32_t argc, const char** argv) -> std::int32_t {
     }
 
     NXOFile()
-        .loadNSO(path)
+        .loadNRO(path)
         .saveELF(outpath);
 
     return 0;

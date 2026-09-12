@@ -1,4 +1,4 @@
-#include "nso.hpp"
+#include "nxo.hpp"
 
 #include "lz4.h"
 #include "picosha2.h"
@@ -35,7 +35,7 @@ static auto ReadFile(std::string_view path) -> std::vector<std::uint8_t> {
     return data;
 }
 
-static auto GetSpan(const std::vector<std::uint8_t>& file_data, std::size_t start, std::size_t size, const char* name) -> std::span<const std::uint8_t> {
+static auto GetSpan(const std::vector<std::uint8_t>& file_data, std::size_t start, std::size_t size, std::string_view name) -> std::span<const std::uint8_t> {
     if (start > file_data.size() || start + size > file_data.size()) {
         Panic(name, " is out of range of the file");
     }
@@ -110,7 +110,7 @@ static auto CompressZstd(std::vector<std::uint8_t>& dst, std::span<const std::ui
 
 static constexpr std::string_view cSegmentNames[] = { ".text", ".rodata", ".data" };
 
-auto NSOFile::loadNSO(std::string_view path, bool skip_validation) -> NSOFile& {
+auto NXOFile::loadNSO(std::string_view path, bool skip_validation) -> NXOFile& {
     const auto file_data = ReadFile(path);
 
     if (file_data.size() < sizeof(NSOHeader)) {
@@ -119,7 +119,7 @@ auto NSOFile::loadNSO(std::string_view path, bool skip_validation) -> NSOFile& {
 
     const auto header = reinterpret_cast<const NSOHeader*>(file_data.data());
 
-    if (std::memcmp(header->signature, NSO_SIGNATURE, sizeof(NSO_SIGNATURE)) != 0) {
+    if (!CheckSignature(header->signature, NSO_SIGNATURE)) {
         Panic("Invalid NSO signature");
     }
 
@@ -127,7 +127,7 @@ auto NSOFile::loadNSO(std::string_view path, bool skip_validation) -> NSOFile& {
         Panic("Invalid NSO version");
     }
 
-    mFlags = header->flags;
+    mNSOFlags = header->flags;
     mBssSize = header->bss_size;
 
     for (std::uint32_t segment = Segment_Start; segment < Segment_Count; ++segment) {
@@ -135,7 +135,7 @@ auto NSOFile::loadNSO(std::string_view path, bool skip_validation) -> NSOFile& {
         switch (segment) {
             case Segment_Text:
                 if (isFlagSet(TextCompress)) {
-                    const auto segment_data = GetSpan(file_data, header->text_file_offset, header->text_compressed_size, ".text");
+                    const auto segment_data = GetSpan(file_data, header->text_file_offset, header->text_compressed_size, cSegmentNames[segment]);
                     auto decompressed = std::vector<std::uint8_t>(header->text_size);
                     if (isFlagSet(UseZbicCompression)) {
                         DecompressZstd(decompressed, segment_data);
@@ -144,31 +144,31 @@ auto NSOFile::loadNSO(std::string_view path, bool skip_validation) -> NSOFile& {
                     }
                     setSegment(Segment_Text, decompressed);
                 } else {
-                    setSegment(Segment_Text, GetSpan(file_data, header->text_file_offset, header->text_size, ".text"));
+                    setSegment(Segment_Text, GetSpan(file_data, header->text_file_offset, header->text_size, cSegmentNames[segment]));
                 }
 
                 verify = isFlagSet(TextHash);
                 break;
             case Segment_Ro:
                 if (isFlagSet(RoCompress)) {
-                    const auto segment_data = GetSpan(file_data, header->ro_file_offset, header->ro_compressed_size, ".rodata");
+                    const auto segment_data = GetSpan(file_data, header->ro_file_offset, header->ro_compressed_size, cSegmentNames[segment]);
                     auto decompressed = std::vector<std::uint8_t>(header->ro_size);
                     DecompressLZ4(decompressed, segment_data);
                     setSegment(Segment_Ro, decompressed);
                 } else {
-                    setSegment(Segment_Ro, GetSpan(file_data, header->ro_file_offset, header->ro_size, ".rodata"));
+                    setSegment(Segment_Ro, GetSpan(file_data, header->ro_file_offset, header->ro_size, cSegmentNames[segment]));
                 }
 
                 verify = isFlagSet(RoHash);
                 break;
             case Segment_Data:
                 if (isFlagSet(DataCompress)) {
-                    const auto segment_data = GetSpan(file_data, header->data_file_offset, header->data_compressed_size, ".data");
+                    const auto segment_data = GetSpan(file_data, header->data_file_offset, header->data_compressed_size, cSegmentNames[segment]);
                     auto decompressed = std::vector<std::uint8_t>(header->data_size);
                     DecompressLZ4(decompressed, segment_data);
                     setSegment(Segment_Data, decompressed);
                 } else {
-                    setSegment(Segment_Data, GetSpan(file_data, header->data_file_offset, header->data_size, ".data"));
+                    setSegment(Segment_Data, GetSpan(file_data, header->data_file_offset, header->data_size, cSegmentNames[segment]));
                 }
 
                 verify = isFlagSet(DataHash);
@@ -205,7 +205,62 @@ auto NSOFile::loadNSO(std::string_view path, bool skip_validation) -> NSOFile& {
     return *this;
 }
 
-auto NSOFile::loadELF(std::string_view path) -> NSOFile& {
+auto NXOFile::loadNRO(std::string_view path) -> NXOFile& {
+    const auto file_data = ReadFile(path);
+
+    if (file_data.size() < sizeof(NROHeader)) {
+        Panic("Input file is too small to be a valid NRO file");
+    }
+
+    const auto header = reinterpret_cast<const NROHeader*>(file_data.data());
+
+    if (!CheckSignature(header->signature, NRO_SIGNATURE)) {
+        Panic("Invalid NRO signature");
+    }
+
+    if (header->version != 0) {
+        Panic("Invalid NRO version");
+    }
+
+    mNROFlags = header->flags;
+    mBssSize = header->bss_size;
+
+    for (std::uint32_t segment = Segment_Start; segment < Segment_Count; ++segment) {
+        switch (segment) {
+            case Segment_Text:
+                setSegment(Segment_Text, GetSpan(file_data, header->text_offset, header->text_size, cSegmentNames[segment]));
+                break;
+            case Segment_Ro:
+                setSegment(Segment_Ro, GetSpan(file_data, header->ro_offset, header->ro_size, cSegmentNames[segment]));
+                break;
+            case Segment_Data:
+                setSegment(Segment_Data, GetSpan(file_data, header->rw_offset, header->rw_size, cSegmentNames[segment]));
+                break;
+        }
+    }
+
+    const auto dynamic = getDynamic();
+    if (header->dyn_str_size == 0) {
+        mDynStr = findDynStrRange(dynamic).value_or({});
+    } else {
+        mDynStr.start = header->dyn_str_offset + getRodataOffset();
+        mDynStr.size = header->dyn_str_size;
+    }
+
+    if (header->dyn_sym_size == 0) {
+        mDynSym = findDynSymRange(dynamic).value_or({});
+    } else {
+        mDynSym.start = header->dyn_sym_offset + getRodataOffset();
+        mDynSym.size = header->dyn_sym_size;
+    }
+
+    setModuleIdFromRodata();
+    setModuleNameFromRodata();
+
+    return *this;
+}
+
+auto NXOFile::loadELF(std::string_view path) -> NXOFile& {
     const auto file_data = ReadFile(path);
 
     if (file_data.size() < sizeof(Elf64_Ehdr)) {
@@ -383,7 +438,7 @@ auto NSOFile::loadELF(std::string_view path) -> NSOFile& {
     return *this;
 }
 
-auto NSOFile::saveNSO(std::string_view path, const std::optional<std::string_view>& name, const std::optional<ModuleId>& module_id) -> NSOFile& {
+auto NXOFile::saveNSO(std::string_view path, const std::optional<std::string_view>& name, const std::optional<ModuleId>& module_id) -> NXOFile& {
     if (name) {
         setName(*name);
     }
@@ -396,7 +451,7 @@ auto NSOFile::saveNSO(std::string_view path, const std::optional<std::string_vie
     std::memset(std::addressof(header), 0, sizeof(header));
     std::memcpy(header.signature, NSO_SIGNATURE, sizeof(NSO_SIGNATURE));
 
-    header.flags = mFlags;
+    header.flags = getNSOFlags();
     header.bss_size = getBssSize();
     std::memcpy(header.module_id.data(), mModuleId.data(), mModuleId.size());
     header.dyn_str_offset = mDynStr.start != 0 ? mDynStr.start - getRodataOffset() : 0;
@@ -487,7 +542,60 @@ auto NSOFile::saveNSO(std::string_view path, const std::optional<std::string_vie
     return *this;
 }
 
-auto NSOFile::getModuleHeaderLocation() const -> const ModuleHeaderLocation* {
+auto NXOFile::saveNRO(std::string_view path, const std::optional<ModuleId>& module_id) -> NXOFile& {
+    if (module_id) {
+        setModuleId(*module_id);
+    }
+
+    if (getText().size() < sizeof(NROHeader)) {
+        Panic(".text segment is too small to be a valid NRO");
+    }
+
+    auto header = reinterpret_cast<NROHeader*>(getText().data());
+    // rocrt header needs to remain untouched
+    // WARNING: this will overwrite the previous header (or any data that is there - the user needs to ensure the file is valid)
+    std::memset(getText().data() + sizeof(RocrtHeader), 0, sizeof(NROHeader) - sizeof(RocrtHeader));
+    std::memcpy(header->signature, NRO_SIGNATURE, sizeof(NRO_SIGNATURE));
+
+    header->flags = getNROFlags();
+    header->text_offset = getTextOffset();
+    header->text_size = (getText().size() + cSegmentAlignment - 1) / cSegmentAlignment * cSegmentAlignment;
+    header->ro_offset = getRodataOffset();
+    header->ro_size = (getRodata().size() + cSegmentAlignment - 1) / cSegmentAlignment * cSegmentAlignment;
+    header->rw_offset = getDataOffset();
+    header->rw_size = (getData().size() + cSegmentAlignment - 1) / cSegmentAlignment * cSegmentAlignment;
+    header->bss_size = (getBssSize() + cSegmentAlignment - 1) / cSegmentAlignment * cSegmentAlignment;
+    header->size = getBssOffset();
+    std::memcpy(header->module_id.data(), mModuleId.data(), mModuleId.size());
+    header->dso_handle_offset = findDsoHandle().value_or(0);
+    if (const auto range = findModuleIdRange()) {
+        header->build_id_offset = range->start - getRodataOffset();
+    } else {
+        header->build_id_offset = 0;
+    }
+    header->dyn_str_offset = mDynStr.start != 0 ? mDynStr.start - getRodataOffset() : 0;
+    header->dyn_str_size = mDynStr.size;
+    header->dyn_sym_offset = mDynSym.start != 0 ? mDynSym.start - getRodataOffset() : 0;
+    header->dyn_sym_size = mDynSym.size;
+
+    if (path.empty()) {
+        path = mName;
+    }
+
+    auto file = std::ofstream(std::string(path), std::ios::binary);
+    if (!file) {
+        Panic("Failed to open ", path);
+    }
+
+    for (std::uint32_t segment = Segment_Start; segment < Segment_Count; ++segment) {
+        const auto& s = getSegment(segment);
+        file.write(reinterpret_cast<const char*>(s.data()), s.size());
+    }
+
+    return *this;
+}
+
+auto NXOFile::getModuleHeaderLocation() const -> const ModuleHeaderLocation* {
     const auto& text = getText();
     if (text.size() < cMinimumModuleHeaderLocationSize) {
         Panic("Invalid .text segment");
@@ -496,7 +604,7 @@ auto NSOFile::getModuleHeaderLocation() const -> const ModuleHeaderLocation* {
     return reinterpret_cast<const ModuleHeaderLocation*>(text.data());
 }
 
-auto NSOFile::getModuleHeader(std::size_t* offset) const -> const ModuleHeader* {
+auto NXOFile::getModuleHeader(std::size_t* offset) const -> const ModuleHeader* {
     const auto& text = getText();
     const auto& rodata = getRodata();
 
@@ -514,7 +622,7 @@ auto NSOFile::getModuleHeader(std::size_t* offset) const -> const ModuleHeader* 
     }
 }
 
-auto NSOFile::getDynamic() const -> std::span<const Elf64_Dyn> {
+auto NXOFile::getDynamic() const -> std::span<const Elf64_Dyn> {
     const auto dyn_range = findDynamicRange();
     if (!dyn_range) {
         Panic("Failed to find .dynamic");
@@ -527,7 +635,7 @@ auto NSOFile::getDynamic() const -> std::span<const Elf64_Dyn> {
     return std::span(reinterpret_cast<const Elf64_Dyn*>(getData().data() + dyn_range->start - getDataOffset()), dyn_range->size / sizeof(Elf64_Dyn));
 }
 
-auto NSOFile::findDynamicRange() const -> std::optional<Range> {
+auto NXOFile::findDynamicRange() const -> std::optional<Range> {
     const auto& data = getData();
 
     std::size_t header_offset = 0;
@@ -549,7 +657,7 @@ auto NSOFile::findDynamicRange() const -> std::optional<Range> {
     return std::make_optional<Range>(header_offset + module_header->dynamic_offset, (count + 1) * sizeof(Elf64_Dyn));
 }
 
-auto NSOFile::findDynSymRange(std::span<const Elf64_Dyn> dynamic) const -> std::optional<Range> {
+auto NXOFile::findDynSymRange(std::span<const Elf64_Dyn> dynamic) const -> std::optional<Range> {
     const auto& rodata = getRodata();
 
     auto range = Range{};
@@ -627,7 +735,7 @@ auto NSOFile::findDynSymRange(std::span<const Elf64_Dyn> dynamic) const -> std::
     }
 }
 
-auto NSOFile::findDynStrRange(std::span<const Elf64_Dyn> dynamic) const -> std::optional<Range> {
+auto NXOFile::findDynStrRange(std::span<const Elf64_Dyn> dynamic) const -> std::optional<Range> {
     auto range = Range{};
 
     bool found_start = false;
@@ -659,7 +767,7 @@ auto NSOFile::findDynStrRange(std::span<const Elf64_Dyn> dynamic) const -> std::
     }
 }
 
-auto NSOFile::findModuleNameRange() const -> std::optional<Range> {
+auto NXOFile::findModuleNameRange() const -> std::optional<Range> {
     std::size_t header_offset = 0;
     const auto module_header = getModuleHeader(std::addressof(header_offset));
 
@@ -693,7 +801,7 @@ auto NSOFile::findModuleNameRange() const -> std::optional<Range> {
     }
 }
 
-auto NSOFile::findModuleIdRange() const -> std::optional<Range> {
+auto NXOFile::findModuleIdRange() const -> std::optional<Range> {
     std::size_t header_offset = 0;
     const auto module_header = getModuleHeader(std::addressof(header_offset));
 
@@ -734,7 +842,90 @@ auto NSOFile::findModuleIdRange() const -> std::optional<Range> {
     }
 }
 
-auto NSOFile::setModuleId(const ModuleId& id) -> NSOFile& {
+auto NXOFile::findDsoHandle() const -> std::optional<std::uint32_t> {
+    const auto& data = getData();
+    if (data.empty()) {
+        return std::nullopt;
+    }
+
+    const auto& rodata = getRodata();
+
+    const auto data_offset = getDataOffset();
+    const auto rodata_offset = getRodataOffset();
+
+    std::size_t rel_offset = 0;
+    std::size_t rela_offset = 0;
+    std::size_t relr_offset = 0;
+    std::size_t rel_size = 0;
+    std::size_t rela_size = 0;
+    std::size_t relr_size = 0;
+    for (const auto& dyn : getDynamic()) {
+        switch (dyn.d_tag) {
+            case DT_REL: rel_offset = dyn.d_un.d_ptr; break;
+            case DT_RELSZ: rel_size = dyn.d_un.d_val; break;
+            case DT_RELA: rela_offset = dyn.d_un.d_ptr; break;
+            case DT_RELASZ: rela_size = dyn.d_un.d_val; break;
+            case DT_RELR: relr_offset = dyn.d_un.d_ptr; break;
+            case DT_RELRSZ: relr_size = dyn.d_un.d_val; break;
+        }
+    }
+
+    if (isInRodata(rel_offset, rel_size)) {
+        const auto rel_range = std::span{ reinterpret_cast<const Elf64_Rel*>(rodata.data() + rel_offset - rodata_offset), rel_size / sizeof(Elf64_Rel) };
+        for (const auto& rel : rel_range) {
+            if (ELF64_R_TYPE(rel.r_info) == R_AARCH64_RELATIVE && isInData(rel.r_offset)) {
+                uintptr_t value;
+                std::memcpy(std::addressof(value), data.data() + rel.r_offset - data_offset, sizeof(value));
+                if (value == rel.r_offset) {
+                    return rel.r_offset;
+                }
+            }
+        }
+    }
+
+    if (isInRodata(rela_offset, rela_size)) {
+        const auto rela_range = std::span{ reinterpret_cast<const Elf64_Rela*>(rodata.data() + rela_offset - rodata_offset), rela_size / sizeof(Elf64_Rela) };
+        for (const auto& rel : rela_range) {
+            if (ELF64_R_TYPE(rel.r_info) == R_AARCH64_RELATIVE && isInData(rel.r_offset)) {
+                uintptr_t value;
+                std::memcpy(std::addressof(value), data.data() + rel.r_offset - data_offset, sizeof(value));
+                if (value + rel.r_addend == rel.r_offset) {
+                    return rel.r_offset;
+                }
+            }
+        }
+    }
+
+    if (isInRodata(relr_offset, relr_size)) {
+        const auto relr_range = std::span{ reinterpret_cast<const Elf64_Relr*>(rodata.data() + relr_offset - rodata_offset), relr_size / sizeof(Elf64_Relr) };
+        std::uint64_t target = 0;
+        for (auto rel : relr_range) {
+            if ((rel & 1) == 0) {
+                uintptr_t value;
+                std::memcpy(std::addressof(value), data.data() + rel - data_offset, sizeof(value));
+                if (value == rel) {
+                    return rel;
+                }
+                target = rel + sizeof(void*);
+            } else {
+                for (std::uint32_t i = 0; (rel >>= 1) != 0; ++i) {
+                    if (rel & 1) {
+                        uintptr_t value;
+                        std::memcpy(std::addressof(value), data.data() + target + i * sizeof(void*) - data_offset, sizeof(value));
+                        if (value == rel) {
+                            return rel;
+                        }
+                    }
+                }
+                target += sizeof(void*) * 8 - 1;
+            }
+        }
+    }
+
+    return std::nullopt;
+}
+
+auto NXOFile::setModuleId(const ModuleId& id) -> NXOFile& {
     const auto range = findModuleIdRange();
     if (!range) {
         Panic("No module id in file");
@@ -764,7 +955,7 @@ auto NSOFile::setModuleId(const ModuleId& id) -> NSOFile& {
     return *this;
 }
 
-auto NSOFile::setModuleNameFromRodata() -> void {
+auto NXOFile::setModuleNameFromRodata() -> void {
     const auto module_name_range = findModuleNameRange();
     if (!module_name_range) {
         Panic("Module name not found");
@@ -801,7 +992,7 @@ auto NSOFile::setModuleNameFromRodata() -> void {
     }
 }
 
-auto NSOFile::setModuleIdFromRodata() -> void {
+auto NXOFile::setModuleIdFromRodata() -> void {
     const auto module_id_range = findModuleIdRange();
     if (!module_id_range) {
         Panic("No module id found");

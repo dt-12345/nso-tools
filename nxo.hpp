@@ -9,17 +9,6 @@
 #include <string_view>
 #include <vector>
 
-enum Flags {
-    TextCompress        = 1 << 0,
-    RoCompress          = 1 << 1,
-    DataCompress        = 1 << 2,
-    TextHash            = 1 << 3,
-    RoHash              = 1 << 4,
-    DataHash            = 1 << 5,
-    ExecuteOnlyMemory   = 1 << 6,
-    UseZbicCompression  = 1 << 7,
-};
-
 enum SegmentType : std::uint32_t {
     Segment_Text    = 0,
     Segment_Ro      = 1,
@@ -30,47 +19,8 @@ enum SegmentType : std::uint32_t {
 };
 
 static constexpr const char NSO_SIGNATURE[4] = { 'N', 'S', 'O', '0' };
+static constexpr const char NRO_SIGNATURE[4] = { 'N', 'R', 'O', '0' };
 static constexpr const std::size_t cSegmentAlignment = 0x1000;
-
-using Hash = std::array<std::uint8_t, 0x20>;
-using ModuleId = std::array<std::uint8_t, 0x20>;
-
-struct NSOHeader {
-    char signature[4];
-    std::uint32_t version;
-    std::uint32_t reserved0;
-    std::uint32_t flags;
-    std::uint32_t text_file_offset;
-    std::uint32_t text_memory_offset;
-    std::uint32_t text_size;
-    std::uint32_t module_name_offset;
-    std::uint32_t ro_file_offset;
-    std::uint32_t ro_memory_offset;
-    std::uint32_t ro_size;
-    std::uint32_t module_name_size;
-    std::uint32_t data_file_offset;
-    std::uint32_t data_memory_offset;
-    std::uint32_t data_size;
-    std::uint32_t bss_size;
-    ModuleId module_id;
-    std::uint32_t text_compressed_size;
-    std::uint32_t ro_compressed_size;
-    std::uint32_t data_compressed_size;
-    std::uint8_t reserved1[0x24];
-    std::uint32_t dyn_str_offset;
-    std::uint32_t dyn_str_size;
-    std::uint32_t dyn_sym_offset;
-    std::uint32_t dyn_sym_size;
-    union {
-        struct {
-            Hash text_hash;
-            Hash ro_hash;
-            Hash data_hash;
-        };
-        Hash segment_hashes[Segment_Count];
-    };
-};
-static_assert(sizeof(NSOHeader) == 0x100);
 
 struct ModuleHeaderLocation {
     std::uint32_t entry;
@@ -94,6 +44,11 @@ struct ModuleHeader {
     std::int32_t nx_debuglink_end;
     std::int32_t gnu_buildid_start;
     std::int32_t gnu_buildid_end;
+};
+
+struct RocrtHeader {
+    ModuleHeaderLocation header_location;
+    std::uint32_t reserved;
 };
 
 struct RocrtVersion {
@@ -137,21 +92,99 @@ struct Range {
     }
 };
 
-class NSOFile {
-public:
-    NSOFile() = default;
+using Hash = std::array<std::uint8_t, 0x20>;
+using ModuleId = std::array<std::uint8_t, 0x20>;
 
-    auto setName(std::string_view name) -> NSOFile& {
+inline constexpr auto CheckSignature(const char(&value)[4], const char(&expected)[4]) -> bool {
+    return value[0] == expected[0] && value[1] == expected[1] && value[2] == expected[2] && value[3] == expected[3];
+}
+
+struct NSOHeader {
+    char signature[4];
+    std::uint32_t version;
+    std::uint32_t reserved0;
+    std::uint32_t flags;
+    std::uint32_t text_file_offset;
+    std::uint32_t text_memory_offset;
+    std::uint32_t text_size;
+    std::uint32_t module_name_offset;
+    std::uint32_t ro_file_offset;
+    std::uint32_t ro_memory_offset;
+    std::uint32_t ro_size;
+    std::uint32_t module_name_size;
+    std::uint32_t data_file_offset;
+    std::uint32_t data_memory_offset;
+    std::uint32_t data_size;
+    std::uint32_t bss_size;
+    ModuleId module_id;
+    std::uint32_t text_compressed_size;
+    std::uint32_t ro_compressed_size;
+    std::uint32_t data_compressed_size;
+    std::uint8_t reserved1[0x24];
+    std::uint32_t dyn_str_offset;
+    std::uint32_t dyn_str_size;
+    std::uint32_t dyn_sym_offset;
+    std::uint32_t dyn_sym_size;
+    Hash segment_hashes[Segment_Count];
+};
+static_assert(sizeof(NSOHeader) == 0x100);
+
+struct NROHeader {
+    RocrtHeader header;
+    char signature[4];
+    std::uint32_t version;
+    std::uint32_t size;
+    std::uint32_t flags;
+    std::uint32_t text_offset;
+    std::uint32_t text_size;
+    std::uint32_t ro_offset;
+    std::uint32_t ro_size;
+    std::uint32_t rw_offset;
+    std::uint32_t rw_size;
+    std::uint32_t bss_size;
+    std::uint32_t reserved0;
+    ModuleId module_id;
+    std::uint32_t dso_handle_offset;
+    std::uint32_t reserved1;
+    std::uint32_t build_id_offset;
+    std::uint32_t reserved2;
+    std::uint32_t dyn_str_offset;
+    std::uint32_t dyn_str_size;
+    std::uint32_t dyn_sym_offset;
+    std::uint32_t dyn_sym_size;
+};
+static_assert(sizeof(NROHeader) == 0x80);
+
+class NXOFile {
+public:
+    enum NSOFlags {
+        TextCompress        = 1 << 0,
+        RoCompress          = 1 << 1,
+        DataCompress        = 1 << 2,
+        TextHash            = 1 << 3,
+        RoHash              = 1 << 4,
+        DataHash            = 1 << 5,
+        ExecuteOnlyMemory   = 1 << 6,
+        UseZbicCompression  = 1 << 7,
+    };
+
+    enum NROFlags {
+        HeaderSection       = 1 << 0,
+    };
+
+    NXOFile() = default;
+
+    auto setName(std::string_view name) -> NXOFile& {
         mName = name;
         return *this;
     }
 
-    auto setFlag(Flags flag) -> NSOFile& {
-        mFlags |= flag;
+    auto setFlag(NSOFlags flag) -> NXOFile& {
+        mNSOFlags |= flag;
         return *this;
     }
 
-    auto setFlag(Flags flag, bool value) -> NSOFile& {
+    auto setFlag(NSOFlags flag, bool value) -> NXOFile& {
         if (value) {
             return setFlag(flag);
         } else {
@@ -159,12 +192,12 @@ public:
         }
     }
 
-    auto unsetFlag(Flags flag) -> NSOFile& {
-        mFlags &= ~flag;
+    auto unsetFlag(NSOFlags flag) -> NXOFile& {
+        mNSOFlags &= ~flag;
         return *this;
     }
 
-    auto unsetFlag(Flags flag, bool value) -> NSOFile& {
+    auto unsetFlag(NSOFlags flag, bool value) -> NXOFile& {
         if (value) {
             return unsetFlag(flag);
         } else {
@@ -172,12 +205,47 @@ public:
         }
     }
 
-    [[nodiscard]] auto isFlagSet(Flags flag) const -> bool {
-        return (mFlags & flag) != 0;
+    [[nodiscard]] auto isFlagSet(NSOFlags flag) const -> bool {
+        return (mNSOFlags & flag) != 0;
     }
 
-    [[nodiscard]] auto getFlag() const -> std::uint32_t {
-        return mFlags;
+    [[nodiscard]] auto getNSOFlags() const -> std::uint32_t {
+        return mNSOFlags;
+    }
+
+    
+    auto setFlag(NROFlags flag) -> NXOFile& {
+        mNROFlags |= flag;
+        return *this;
+    }
+
+    auto setFlag(NROFlags flag, bool value) -> NXOFile& {
+        if (value) {
+            return setFlag(flag);
+        } else {
+            return unsetFlag(flag);
+        }
+    }
+
+    auto unsetFlag(NROFlags flag) -> NXOFile& {
+        mNROFlags &= ~flag;
+        return *this;
+    }
+
+    auto unsetFlag(NROFlags flag, bool value) -> NXOFile& {
+        if (value) {
+            return unsetFlag(flag);
+        } else {
+            return setFlag(flag);
+        }
+    }
+
+    [[nodiscard]] auto isFlagSet(NROFlags flag) const -> bool {
+        return (mNROFlags & flag) != 0;
+    }
+
+    [[nodiscard]] auto getNROFlags() const -> std::uint32_t {
+        return mNROFlags;
     }
 
     [[nodiscard]] auto getModuleId() const -> const ModuleId& {
@@ -217,7 +285,7 @@ public:
     }
 
     [[nodiscard]] auto getBssOffset() const -> std::size_t {
-        return getDataOffset() + getData().size();
+        return (getDataOffset() + getData().size() + cSegmentAlignment - 1) / cSegmentAlignment * cSegmentAlignment;
     }
 
     [[nodiscard]] auto isInText(std::size_t offset) const -> bool {
@@ -244,11 +312,13 @@ public:
         return getDataOffset() <= offset && offset + size <= getBssOffset();
     }
 
-    auto loadNSO(std::string_view path, bool skip_validation = false) -> NSOFile&;
-    auto loadELF(std::string_view path) -> NSOFile&;
+    auto loadNSO(std::string_view path, bool skip_validation = false) -> NXOFile&;
+    auto loadNRO(std::string_view path) -> NXOFile&;
+    auto loadELF(std::string_view path) -> NXOFile&;
 
-    auto saveNSO(std::string_view path, const std::optional<std::string_view>& name = std::nullopt, const std::optional<ModuleId>& module_id = std::nullopt) -> NSOFile&;
-    auto saveELF(std::string_view path) -> NSOFile&;
+    auto saveNSO(std::string_view path, const std::optional<std::string_view>& name = std::nullopt, const std::optional<ModuleId>& module_id = std::nullopt) -> NXOFile&;
+    auto saveNRO(std::string_view path, const std::optional<ModuleId>& module_id = std::nullopt) -> NXOFile&;
+    auto saveELF(std::string_view path) -> NXOFile&;
 
     [[nodiscard]] auto getModuleHeaderLocation() const -> const ModuleHeaderLocation*;
     [[nodiscard]] auto getModuleHeader(std::size_t* offset) const -> const ModuleHeader*;
@@ -261,7 +331,7 @@ public:
     [[nodiscard]] auto findModuleIdRange() const -> std::optional<Range>;
 
 private:
-    auto setSegment(std::uint32_t segment, std::span<const std::uint8_t> data) -> NSOFile& {
+    auto setSegment(std::uint32_t segment, std::span<const std::uint8_t> data) -> NXOFile& {
         mSegments.at(segment).assign(data.begin(), data.end());
         return *this;
     }
@@ -286,20 +356,23 @@ private:
         return mName;
     }
 
-    auto setBssSize(std::size_t size) -> NSOFile& {
+    auto setBssSize(std::size_t size) -> NXOFile& {
         mBssSize = size;
         return *this;
     }
 
-    auto setModuleId(const ModuleId& id) -> NSOFile&;
+    auto setModuleId(const ModuleId& id) -> NXOFile&;
 
     auto setModuleNameFromRodata() -> void;
     auto setModuleIdFromRodata() -> void;
 
+    auto findDsoHandle() const -> std::optional<std::uint32_t>;
+
     std::array<std::vector<std::uint8_t>, Segment_Count> mSegments;
     std::string mName;
     std::size_t mBssSize = 0;
-    std::uint32_t mFlags = 0;
+    std::uint32_t mNSOFlags = 0;
+    std::uint32_t mNROFlags = 0;
     ModuleId mModuleId = {};
     Range mDynStr = {};
     Range mDynSym = {};

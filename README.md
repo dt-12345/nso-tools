@@ -11,6 +11,15 @@ nso2elf -o <output_elf_path> <path_to_nso>
 ```sh
 nso2nso -o <output_nso_path> <flags> <path_to_nso>
 ```
+- Convert ELF to NRO (note: program must have room for an NRO header)
+```sh
+elf2nro -o <output_nro_path> <path_to_elf>
+```
+- Convert NRO to ELF
+```sh
+nro2elf -o <output_elf_path> <path_to_elf>
+```
+
 
 Thank you to [SwitchBrew](https://switchbrew.org/wiki/NSO0) for the NSO documentation
 
