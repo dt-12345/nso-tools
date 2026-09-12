@@ -72,7 +72,7 @@ struct NSOHeader {
 };
 static_assert(sizeof(NSOHeader) == 0x100);
 
-struct RocrtInit {
+struct ModuleHeaderLocation {
     std::uint32_t entry;
     std::uint32_t rocrt_info_offset;
     // new versions only
@@ -102,7 +102,7 @@ struct RocrtVersion {
     std::uint32_t sdk_micro;
 };
 
-static constexpr const std::size_t cMinimumRocrtInitSize = 0x8;
+static constexpr const std::size_t cMinimumModuleHeaderLocationSize = 0x8;
 static constexpr const std::size_t cMinimumModuleHeaderSize = 0x1c;
 
 struct NxDebuglink {
@@ -250,7 +250,7 @@ public:
     auto saveNSO(std::string_view path, const std::optional<std::string_view>& name = std::nullopt, const std::optional<ModuleId>& module_id = std::nullopt) -> NSOFile&;
     auto saveELF(std::string_view path) -> NSOFile&;
 
-    [[nodiscard]] auto getRocrtInit() const -> const RocrtInit*;
+    [[nodiscard]] auto getModuleHeaderLocation() const -> const ModuleHeaderLocation*;
     [[nodiscard]] auto getModuleHeader(std::size_t* offset) const -> const ModuleHeader*;
     [[nodiscard]] auto getDynamic() const -> std::span<const Elf64_Dyn>;
 
@@ -305,7 +305,7 @@ private:
     Range mDynSym = {};
 };
 
-inline auto GetRocrtVersion(const RocrtInit* rocrt) -> std::uint32_t {
+inline auto GetRocrtVersion(const ModuleHeaderLocation* rocrt) -> std::uint32_t {
     switch (rocrt->entry) {
         // rtld entrypoints
         case 0xea000000: // b #0x8 (arm)

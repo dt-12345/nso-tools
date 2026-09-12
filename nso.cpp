@@ -487,27 +487,27 @@ auto NSOFile::saveNSO(std::string_view path, const std::optional<std::string_vie
     return *this;
 }
 
-auto NSOFile::getRocrtInit() const -> const RocrtInit* {
+auto NSOFile::getModuleHeaderLocation() const -> const ModuleHeaderLocation* {
     const auto& text = getText();
-    if (text.size() < cMinimumRocrtInitSize) {
+    if (text.size() < cMinimumModuleHeaderLocationSize) {
         Panic("Invalid .text segment");
     }
 
-    return reinterpret_cast<const RocrtInit*>(text.data());
+    return reinterpret_cast<const ModuleHeaderLocation*>(text.data());
 }
 
 auto NSOFile::getModuleHeader(std::size_t* offset) const -> const ModuleHeader* {
     const auto& text = getText();
     const auto& rodata = getRodata();
 
-    const auto rocrt_init = getRocrtInit();
-    if (isInText(rocrt_init->rocrt_info_offset, cMinimumRocrtInitSize)) {
-        const auto text_offset = rocrt_init->rocrt_info_offset - getTextOffset();
-        *offset = rocrt_init->rocrt_info_offset;
+    const auto header_loc = getModuleHeaderLocation();
+    if (isInText(header_loc->rocrt_info_offset, cMinimumModuleHeaderLocationSize)) {
+        const auto text_offset = header_loc->rocrt_info_offset - getTextOffset();
+        *offset = header_loc->rocrt_info_offset;
         return reinterpret_cast<const ModuleHeader*>(text.data() + text_offset);
-    } else if (isInRodata(rocrt_init->rocrt_info_offset, cMinimumModuleHeaderSize)) {
-        const auto rodata_offset = rocrt_init->rocrt_info_offset - getRodataOffset();
-        *offset = rocrt_init->rocrt_info_offset;
+    } else if (isInRodata(header_loc->rocrt_info_offset, cMinimumModuleHeaderSize)) {
+        const auto rodata_offset = header_loc->rocrt_info_offset - getRodataOffset();
+        *offset = header_loc->rocrt_info_offset;
         return reinterpret_cast<const ModuleHeader*>(rodata.data() + rodata_offset);
     } else {
         Panic(".rocrt.info must be in .text or .rodata");
@@ -663,7 +663,7 @@ auto NSOFile::findModuleNameRange() const -> std::optional<Range> {
     std::size_t header_offset = 0;
     const auto module_header = getModuleHeader(std::addressof(header_offset));
 
-    if (GetRocrtVersion(getRocrtInit()) == 0) {
+    if (GetRocrtVersion(getModuleHeaderLocation()) == 0) {
         const auto& rodata = getRodata();
 
         if (rodata.size() < sizeof(NxDebuglink)) {
@@ -697,7 +697,7 @@ auto NSOFile::findModuleIdRange() const -> std::optional<Range> {
     std::size_t header_offset = 0;
     const auto module_header = getModuleHeader(std::addressof(header_offset));
 
-    if (GetRocrtVersion(getRocrtInit()) == 0) {
+    if (GetRocrtVersion(getModuleHeaderLocation()) == 0) {
         const auto& rodata = getRodata();
 
         std::size_t current_offset = (rodata.size() > 0x2000 ? rodata.size() - 0x2000 : 0) / alignof(Elf64_Nhdr) * alignof(Elf64_Nhdr);

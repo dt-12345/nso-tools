@@ -753,12 +753,12 @@ static auto ReadEhFrame(
 auto ELFBuilder::splitText(Context& ctx) -> void {
     const auto& segment_data = ctx.nso.getText();
 
-    if (segment_data.size() < cMinimumRocrtInitSize) {
+    if (segment_data.size() < cMinimumModuleHeaderLocationSize) {
         Panic("Invalid .text segment");
     }
 
-    const auto rocrt_init = reinterpret_cast<const RocrtInit*>(segment_data.data());
-    ctx.rocrt_version = GetRocrtVersion(rocrt_init);
+    const auto header_loc = reinterpret_cast<const ModuleHeaderLocation*>(segment_data.data());
+    ctx.rocrt_version = GetRocrtVersion(header_loc);
     // catch libnx being goofy
     if (ctx.rocrt_version == 1 && std::memcmp(std::addressof(ctx.header->relro_start), cLibNXMagic, sizeof(cLibNXMagic)) == 0) {
         ctx.rocrt_version = 0;
@@ -828,29 +828,29 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
 
     // .rocrt.initro
     if (ctx.rocrt_version == 1) {
-        if (segment_data.size() < sizeof(RocrtInit)) {
+        if (segment_data.size() < sizeof(ModuleHeaderLocation)) {
             Panic("Invalid .rodata segment");
         }
 
-        const auto rocrt_init = reinterpret_cast<const RocrtInit*>(segment_data.data());
-        if (rocrt_init->entry == 1) { // failsafe for unofficial NSOs that pass the rocrt version check but don't actually have this section
+        const auto header_loc = reinterpret_cast<const ModuleHeaderLocation*>(segment_data.data());
+        if (header_loc->entry == 1) { // failsafe for unofficial NSOs that pass the rocrt version check but don't actually have this section
             auto& shdr = addSection(SHT_PROGBITS, SectionType_ROCRT_INITRO);
             shdr.sh_flags = SHF_ALLOC;
             shdr.sh_addr = ctx.nso.getRodataOffset();
             shdr.sh_offset = start_offset;
-            shdr.sh_size = sizeof(RocrtInit);
+            shdr.sh_size = sizeof(ModuleHeaderLocation);
             shdr.sh_link = 0;
             shdr.sh_info = 0;
-            shdr.sh_addralign = alignof(RocrtInit);
+            shdr.sh_addralign = alignof(ModuleHeaderLocation);
             shdr.sh_entsize = 0;
         } else {
-            if (!ctx.nso.isInText(rocrt_init->rocrt_info_offset, cMinimumRocrtInitSize)) {
+            if (!ctx.nso.isInText(header_loc->rocrt_info_offset, cMinimumModuleHeaderLocationSize)) {
                 Panic(".rocrt.init must be in .text");
             }
 
             ctx.rocrt_version = 0;
-            if (ctx.nso.isInText(rocrt_init->rocrt_info_offset, cMinimumRocrtInitSize + sizeof(LibNXExtension))) {
-                const auto ext = reinterpret_cast<const LibNXExtension*>(segment_data.data() + rocrt_init->rocrt_info_offset + cMinimumRocrtInitSize);
+            if (ctx.nso.isInText(header_loc->rocrt_info_offset, cMinimumModuleHeaderLocationSize + sizeof(LibNXExtension))) {
+                const auto ext = reinterpret_cast<const LibNXExtension*>(segment_data.data() + header_loc->rocrt_info_offset + cMinimumModuleHeaderLocationSize);
                 if (std::memcmp(ext->signature, cLibNXMagic, sizeof(cLibNXMagic)) == 0) {
                     ctx.libnx_extension = ext;
                     std::cout << "[INFO] Detected LibNX extension\n";
@@ -895,7 +895,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         shdr.sh_entsize = 0;
 
         // we know that this is in-bounds because we would have panicked above if it wasn't
-        const auto initro = reinterpret_cast<const RocrtInit*>(segment_data.data());
+        const auto initro = reinterpret_cast<const ModuleHeaderLocation*>(segment_data.data());
         // these two structures *should* be adjacent to each other, but to avoid creating an invalid section,
         // make sure that the version starts where the header ends
         if (initro->rocrt_version_offset == ctx.header_offset - ctx.nso.getRodataOffset() + sizeof(ModuleHeader)) {
