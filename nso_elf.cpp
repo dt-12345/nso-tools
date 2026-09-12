@@ -307,7 +307,7 @@ private:
         const ModuleHeader* header = nullptr;
         std::uint32_t rocrt_version = 0;
         std::uint32_t pointer_auth = AuthNone;
-        const LibNXExtension* libnx_extension;
+        const LibNXExtension* libnx_extension = nullptr;
         const Elf64_Dyn* rel = nullptr;
         const Elf64_Dyn* rel_size = nullptr;
         const Elf64_Dyn* rela = nullptr;
