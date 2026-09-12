@@ -20,7 +20,6 @@ elf2nro -o <output_nro_path> <path_to_elf>
 nro2elf -o <output_elf_path> <path_to_elf>
 ```
 
-
 Thank you to [SwitchBrew](https://switchbrew.org/wiki/NSO0) for the NSO documentation
 
 Building

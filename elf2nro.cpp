@@ -33,7 +33,7 @@ auto main(std::int32_t argc, const char** argv) -> std::int32_t {
             << "    --help, -h              print help message\n"
             << "    --output, -o            output filepath\n"
             << "    --id, -i                override module ID\n"
-            << "    --header                create dedicated section for NRO header\n";
+            << "    --header                NRO contains dedicated header segment\n";
     };
 
     if (argc < 2) {
