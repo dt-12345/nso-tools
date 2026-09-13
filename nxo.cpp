@@ -562,6 +562,10 @@ auto NXOFile::saveNRO(std::string_view path, const std::optional<ModuleId>& modu
     std::memset(getText().data() + sizeof(RocrtHeader), 0, sizeof(NROHeader) - sizeof(RocrtHeader));
     std::memcpy(header->signature, NRO_SIGNATURE, sizeof(NRO_SIGNATURE));
 
+    if (isFlagSet(HeaderSection) && getText().size() >= cSegmentAlignment) {
+        std::memset(getText().data() + sizeof(NROHeader), 0, cSegmentAlignment - sizeof(NROHeader));
+    }
+
     header->flags = getNROFlags();
     header->text_offset = getTextOffset();
     header->text_size = (getText().size() + cSegmentAlignment - 1) / cSegmentAlignment * cSegmentAlignment;
