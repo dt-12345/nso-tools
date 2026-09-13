@@ -270,7 +270,7 @@ private:
         ".plt",
         ".rocrt.initro",
         ".nx_debuglink",
-        ".rocrt.info",      // this used to be .rocrt_nro.info for NROs
+        ".rocrt.info",      // this is .rocrt_nro.info for NROs
         ".rel.dyn",
         ".rela.dyn",
         ".rel.plt",

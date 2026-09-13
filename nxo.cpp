@@ -554,6 +554,11 @@ auto NXOFile::saveNRO(std::string_view path, const std::optional<ModuleId>& modu
     auto header = reinterpret_cast<NROHeader*>(getText().data());
     // rocrt header needs to remain untouched
     // WARNING: this will overwrite the previous header (or any data that is there - the user needs to ensure the file is valid)
+    if (GetRocrtVersion(std::addressof(header->header.header_location)) == 1) {
+        std::memset(getText().data() + sizeof(ModuleHeaderLocation), 0, sizeof(RocrtHeader) - sizeof(ModuleHeaderLocation));
+    } else {
+        std::memset(getText().data() + cMinimumModuleHeaderLocationSize, 0, sizeof(RocrtHeader) - cMinimumModuleHeaderLocationSize);
+    }
     std::memset(getText().data() + sizeof(RocrtHeader), 0, sizeof(NROHeader) - sizeof(RocrtHeader));
     std::memcpy(header->signature, NRO_SIGNATURE, sizeof(NRO_SIGNATURE));
 
@@ -590,6 +595,14 @@ auto NXOFile::saveNRO(std::string_view path, const std::optional<ModuleId>& modu
     for (std::uint32_t segment = Segment_Start; segment < Segment_Count; ++segment) {
         const auto& s = getSegment(segment);
         file.write(reinterpret_cast<const char*>(s.data()), s.size());
+
+        const auto pos = static_cast<std::size_t>(file.tellp());
+        const auto aligned = (pos + cSegmentAlignment - 1) / cSegmentAlignment * cSegmentAlignment;
+
+        if (aligned != 0 && pos != aligned) {
+            file.seekp(aligned - 1);
+            file.put(0);
+        }
     }
 
     return *this;
