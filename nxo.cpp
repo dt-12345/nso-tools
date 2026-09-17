@@ -51,7 +51,7 @@ static auto DecompressLZ4(std::vector<std::uint8_t>& dst, std::span<const std::u
         dst.size()
     );
 
-    if (result < dst.size()) {
+    if (static_cast<std::size_t>(result) < dst.size()) {
         Panic("LZ4 decompression failed");
     }
 }
@@ -829,7 +829,6 @@ auto NXOFile::findModuleIdRange() const -> std::optional<Range> {
 
         while (current_offset + sizeof(cGNUNoteMagic) < rodata.size()) {
             if (std::memcmp(rodata.data() + current_offset, cGNUNoteMagic, sizeof(cGNUNoteMagic)) == 0) {
-                const auto note_header_end = rodata.data() + current_offset;
                 if (current_offset >= sizeof(Elf64_Nhdr)) {
                     const auto note_header = reinterpret_cast<const Elf64_Nhdr*>(rodata.data() + current_offset - sizeof(Elf64_Nhdr));
                     if (note_header->n_namesz == 4 && (note_header->n_type == 3 || note_header->n_type == 4) && note_header->n_descsz <= sizeof(ModuleId)) {

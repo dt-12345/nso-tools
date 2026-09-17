@@ -574,7 +574,6 @@ static auto ReadEhFrame(
             }
 
             auto aug_str_offset = version_offset + sizeof(std::uint8_t);
-            std::size_t aug_str_length = 0;
             std::string aug_str = "";
             while (true) {
                 if (!nso.isInRodata(aug_str_offset, sizeof(char))) {
@@ -703,7 +702,6 @@ static auto ReadEhFrame(
 
         const auto type_table_encoding = *reinterpret_cast<const Encoding*>(data.data() + offset - nso.getRodataOffset());
         offset += sizeof(Encoding);
-        std::size_t type_table_offset = 0;
         if (type_table_encoding != DW_EH_PE_omit) {
             // if we have a type table, then it must come last (the type table offset is to the end of the type table)
             offset += ReadLEB128<false>(std::span(data).subspan(offset - nso.getRodataOffset()));
@@ -1483,7 +1481,6 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
         got_plt_range.size = size;
     }
 
-    bool has_got = false;
     Range got_range{};
 
     // .got
@@ -1507,7 +1504,6 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
         shdr.sh_addralign = alignof(void*);
         shdr.sh_entsize = sizeof(void*);
 
-        has_got = true;
         got_range.start = ctx.libnx_extension->got_start;
         got_range.size = size;
     } else if (ctx.rocrt_version == 0) {
@@ -1543,7 +1539,6 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
             shdr.sh_addralign = alignof(void*);
             shdr.sh_entsize = sizeof(void*);
 
-            has_got = true;
             got_range.start = got_start;
             got_range.size = got_end - got_start;
         }
@@ -1587,7 +1582,6 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
             shdr.sh_addralign = alignof(void*);
             shdr.sh_entsize = sizeof(void*);
 
-            has_got = true;
             got_range.start = got_start;
             got_range.size = got_end - got_start;
         }
