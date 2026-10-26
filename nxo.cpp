@@ -56,7 +56,7 @@ static auto DecompressLZ4(std::vector<std::uint8_t>& dst, std::span<const std::u
     }
 }
 
-static auto DecompressZstd(std::vector<std::uint8_t>& dst, std::span<const std::uint8_t> src) -> void {
+static auto DecompressZbic(std::vector<std::uint8_t>& dst, std::span<const std::uint8_t> src) -> void {
     const auto result = ZSTD_decompress(
         dst.data(),
         dst.size(),
@@ -88,7 +88,7 @@ static auto CompressLZ4(std::vector<std::uint8_t>& dst, std::span<const std::uin
     return static_cast<std::uint32_t>(compressed_size);
 };
 
-static auto CompressZstd(std::vector<std::uint8_t>& dst, std::span<const std::uint8_t> src) -> std::uint32_t {
+static auto CompressZbic(std::vector<std::uint8_t>& dst, std::span<const std::uint8_t> src) -> std::uint32_t {
     const auto req_size = ZSTD_compressBound(src.size());
     dst.resize(req_size);
 
@@ -138,7 +138,7 @@ auto NXOFile::loadNSO(std::string_view path, bool skip_validation) -> NXOFile& {
                     const auto segment_data = GetSpan(file_data, header->text_file_offset, header->text_compressed_size, cSegmentNames[segment]);
                     auto decompressed = std::vector<std::uint8_t>(header->text_size);
                     if (isFlagSet(UseZbicCompression)) {
-                        DecompressZstd(decompressed, segment_data);
+                        DecompressZbic(decompressed, segment_data);
                     } else {
                         DecompressLZ4(decompressed, segment_data);
                     }
@@ -153,7 +153,11 @@ auto NXOFile::loadNSO(std::string_view path, bool skip_validation) -> NXOFile& {
                 if (isFlagSet(RoCompress)) {
                     const auto segment_data = GetSpan(file_data, header->ro_file_offset, header->ro_compressed_size, cSegmentNames[segment]);
                     auto decompressed = std::vector<std::uint8_t>(header->ro_size);
-                    DecompressLZ4(decompressed, segment_data);
+                    if (isFlagSet(UseZbicCompression)) {
+                        DecompressZbic(decompressed, segment_data);
+                    } else {
+                        DecompressLZ4(decompressed, segment_data);
+                    }
                     setSegment(Segment_Ro, decompressed);
                 } else {
                     setSegment(Segment_Ro, GetSpan(file_data, header->ro_file_offset, header->ro_size, cSegmentNames[segment]));
@@ -165,7 +169,11 @@ auto NXOFile::loadNSO(std::string_view path, bool skip_validation) -> NXOFile& {
                 if (isFlagSet(DataCompress)) {
                     const auto segment_data = GetSpan(file_data, header->data_file_offset, header->data_compressed_size, cSegmentNames[segment]);
                     auto decompressed = std::vector<std::uint8_t>(header->data_size);
-                    DecompressLZ4(decompressed, segment_data);
+                    if (isFlagSet(UseZbicCompression)) {
+                        DecompressZbic(decompressed, segment_data);
+                    } else {
+                        DecompressLZ4(decompressed, segment_data);
+                    }
                     setSegment(Segment_Data, decompressed);
                 } else {
                     setSegment(Segment_Data, GetSpan(file_data, header->data_file_offset, header->data_size, cSegmentNames[segment]));
@@ -490,7 +498,7 @@ auto NXOFile::saveNSO(std::string_view path, const std::optional<std::string_vie
                 if (isFlagSet(TextCompress)) {
                     auto compressed = std::vector<std::uint8_t>{};
                     if (isFlagSet(UseZbicCompression)) {
-                        header.text_compressed_size = CompressZstd(compressed, segment_data);
+                        header.text_compressed_size = CompressZbic(compressed, segment_data);
                     } else {
                         header.text_compressed_size = CompressLZ4(compressed, segment_data);
                     }
@@ -506,7 +514,11 @@ auto NXOFile::saveNSO(std::string_view path, const std::optional<std::string_vie
                 header.ro_size = segment_data.size();
                 if (isFlagSet(RoCompress)) {
                     auto compressed = std::vector<std::uint8_t>{};
-                    header.ro_compressed_size = CompressLZ4(compressed, segment_data);
+                    if (isFlagSet(UseZbicCompression)) {
+                        header.ro_compressed_size = CompressZbic(compressed, segment_data);
+                    } else {
+                        header.ro_compressed_size = CompressLZ4(compressed, segment_data);
+                    }
                     file.write(reinterpret_cast<const char*>(compressed.data()), compressed.size());
                 } else {
                     file.write(reinterpret_cast<const char*>(segment_data.data()), segment_data.size());
@@ -519,7 +531,11 @@ auto NXOFile::saveNSO(std::string_view path, const std::optional<std::string_vie
                 header.data_size = segment_data.size();
                 if (isFlagSet(DataCompress)) {
                     auto compressed = std::vector<std::uint8_t>{};
-                    header.data_compressed_size = CompressLZ4(compressed, segment_data);
+                    if (isFlagSet(UseZbicCompression)) {
+                        header.data_compressed_size = CompressZbic(compressed, segment_data);
+                    } else {
+                        header.data_compressed_size = CompressLZ4(compressed, segment_data);
+                    }
                     file.write(reinterpret_cast<const char*>(compressed.data()), compressed.size());
                 } else {
                     file.write(reinterpret_cast<const char*>(segment_data.data()), segment_data.size());

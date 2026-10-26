@@ -39,7 +39,7 @@ auto main(std::int32_t argc, const char** argv) -> std::int32_t {
             << "    --compress-ro           compress .rodata section (default)\n"
             << "    --compress-data         compress .data section (default)\n"
             << "    --compress, -c          compress all sections (default)\n"
-            << "    --zstd, -z              use ZSTD compression for .text\n"
+            << "    --zstd, -z              use ZSTD compression\n"
             << "  Verification Options (prefix with `no` to invert)\n"
             << "    --verify-text           verify .text section hash when loading (default)\n"
             << "    --verify-ro             verify .rodata section hash when loading (default)\n"
