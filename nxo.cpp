@@ -51,8 +51,8 @@ static auto DecompressLZ4(std::vector<std::uint8_t>& dst, std::span<const std::u
         dst.size()
     );
 
-    if (static_cast<std::size_t>(result) < dst.size()) {
-        Panic("LZ4 decompression failed");
+    if (result < 0 || static_cast<std::size_t>(result) < dst.size()) {
+        Panic("LZ4 decompression failed: ", result);
     }
 }
 
@@ -65,7 +65,7 @@ static auto DecompressZstd(std::vector<std::uint8_t>& dst, std::span<const std::
     );
 
     if (ZSTD_isError(result) || result < dst.size()) {
-        Panic("ZSTD decompression failed");
+        Panic("ZSTD decompression failed: ", ZSTD_getErrorName(result));
     }
 }
 
@@ -81,7 +81,7 @@ static auto CompressLZ4(std::vector<std::uint8_t>& dst, std::span<const std::uin
     );
 
     if (compressed_size <= 0) {
-        Panic("LZ4 compression failed");
+        Panic("LZ4 compression failed: ", compressed_size);
     }
 
     dst.erase(dst.begin() + compressed_size, dst.end());
@@ -101,7 +101,7 @@ static auto CompressZstd(std::vector<std::uint8_t>& dst, std::span<const std::ui
     );
 
     if (ZSTD_isError(compressed_size)) {
-        Panic("ZSTD compression failed: ", ZSTD_getErrorString(ZSTD_getErrorCode(compressed_size)));
+        Panic("ZSTD compression failed: ", ZSTD_getErrorName(compressed_size));
     }
 
     dst.erase(dst.begin() + compressed_size, dst.end());
