@@ -639,7 +639,8 @@ static auto ReadEhFrame(
                             break;
                         }
                         default:
-                            Panic("Invalid CIE augmentation string ", aug_str);
+                            std::cerr << "Unknown CIE augmentation string component: " << c << " (" << aug_str << ")" << "\n";
+                            break;
                     }
                 }
             }
