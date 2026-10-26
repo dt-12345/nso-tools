@@ -18,9 +18,9 @@ enum SegmentType : std::uint32_t {
     Segment_Start   = Segment_Text,
 };
 
-static constexpr const char NSO_SIGNATURE[4] = { 'N', 'S', 'O', '0' };
-static constexpr const char NRO_SIGNATURE[4] = { 'N', 'R', 'O', '0' };
-static constexpr const std::size_t cSegmentAlignment = 0x1000;
+static constexpr char NSO_SIGNATURE[4] = { 'N', 'S', 'O', '0' };
+static constexpr char NRO_SIGNATURE[4] = { 'N', 'R', 'O', '0' };
+static constexpr std::size_t cSegmentAlignment = 0x1000;
 
 struct ModuleHeaderLocation {
     std::uint32_t entry;
@@ -57,8 +57,8 @@ struct RocrtVersion {
     std::uint32_t sdk_micro;
 };
 
-static constexpr const std::size_t cMinimumModuleHeaderLocationSize = 0x8;
-static constexpr const std::size_t cMinimumModuleHeaderSize = 0x1c;
+static constexpr std::size_t cMinimumModuleHeaderLocationSize = 0x8;
+static constexpr std::size_t cMinimumModuleHeaderSize = 0x1c;
 
 struct NxDebuglink {
     std::uint32_t version;

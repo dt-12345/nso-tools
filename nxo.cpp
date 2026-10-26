@@ -18,7 +18,7 @@ template <typename... Ts>
     std::exit(1);
 }
 
-static constexpr const char cGNUNoteMagic[] = { 'G', 'N', 'U', '\0' };
+static constexpr char cGNUNoteMagic[] = { 'G', 'N', 'U', '\0' };
 
 static auto ReadFile(std::string_view path) -> std::vector<std::uint8_t> {
     auto file = std::ifstream(std::string(path), std::ios::binary | std::ios::ate);

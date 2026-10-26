@@ -102,7 +102,7 @@ static auto ReadLEB128(std::span<const std::uint8_t> data) -> decltype(auto) {
 
     if constexpr (SIGNED) {
         // sign extend
-        constexpr const auto nbits = sizeof(ResultT) * CHAR_BIT;
+        constexpr auto nbits = sizeof(ResultT) * CHAR_BIT;
         if ((shift < nbits) && ((byte & 0x40) != 0)) {
             result = (result << (nbits - shift)) >> (nbits - shift);
         }
@@ -165,7 +165,7 @@ struct LibNXExtension {
     std::int32_t got_end;
 };
 
-static constexpr const char cLibNXMagic[] = { 'L', 'N', 'Y', '0' };
+static constexpr char cLibNXMagic[] = { 'L', 'N', 'Y', '0' };
 
 class ELFBuilder {
 public:
@@ -203,10 +203,10 @@ public:
     auto write(std::string_view path) const -> void;
 
 private:
-    static constexpr const auto cPhdrCount = Segment_Count + 1; // 3 segments + dynamic
-    static constexpr const auto cDynamicIndex = cPhdrCount - 1;
-    static constexpr const std::size_t cProgramAlign = 0x10000;
-    static constexpr const std::size_t cDynamicAlign = 8;
+    static constexpr auto cPhdrCount = Segment_Count + 1; // 3 segments + dynamic
+    static constexpr auto cDynamicIndex = cPhdrCount - 1;
+    static constexpr std::size_t cProgramAlign = 0x10000;
+    static constexpr std::size_t cDynamicAlign = 8;
 
     struct ProgBits {
         std::span<const std::uint8_t> data;
@@ -265,7 +265,7 @@ private:
     };
 
     // Nintendo uses EX, RO, RW, and ZI for .text, .rodata, .data, and .bss, respectively
-    static constexpr const std::array<std::string_view, SectionType_Count> cSectionNames = {
+    static constexpr std::array<std::string_view, SectionType_Count> cSectionNames = {
         "EX",
         ".plt",
         ".rocrt.initro",
@@ -395,7 +395,7 @@ struct Pattern {
 };
 
 // https://github.com/ARM-software/abi-aa/blob/main/sysvabi64/sysvabi64.rst#procedure-linkage-table
-static constexpr const std::array<InstructionMask, 8> cPltHeader_NoBti = {{
+static constexpr std::array<InstructionMask, 8> cPltHeader_NoBti = {{
     { 0xa9bf7bf0u, 0xffffffffu }, // stp x16, x30, [sp, -#0x10]!
     { 0x90000010u, 0x9f00001fu }, // adrp x16, :page:&.got.plt[2]
     { 0xf9400211u, 0xffc003ffu }, // ldr x17, [x16, :lo12:&.got.plt[2]]
@@ -406,7 +406,7 @@ static constexpr const std::array<InstructionMask, 8> cPltHeader_NoBti = {{
     { 0xd503201fu, 0xffffffffu }, // nop
 }};
 
-static constexpr const std::array<InstructionMask, 9> cPltHeader_Bti = {{
+static constexpr std::array<InstructionMask, 9> cPltHeader_Bti = {{
     { 0xd503245fu, 0xffffffffu }, // bti c
     { 0xa9bf7bf0u, 0xffffffffu }, // stp x16, x30, [sp, -#0x10]!
     { 0x90000010u, 0x9f00001fu }, // adrp x16, :page:&.got.plt[2]
@@ -418,21 +418,21 @@ static constexpr const std::array<InstructionMask, 9> cPltHeader_Bti = {{
     { 0xd503201fu, 0xffffffffu }, // nop
 }};
 
-static constexpr const Pattern cPltHeaderMasks[4] = {
+static constexpr Pattern cPltHeaderMasks[4] = {
     { cPltHeader_NoBti, 2, 3 }, // no BTI, no PAC
     { cPltHeader_Bti  , 3, 4 }, // BTI, no PAC
     { cPltHeader_Bti  , 3, 4 }, // no BTI, PAC
     { cPltHeader_Bti  , 3, 4 }, // BTI, PAC
 };
 
-static constexpr const std::array<InstructionMask, 4> cPltEntry_NoBtiNoPac = {{
+static constexpr std::array<InstructionMask, 4> cPltEntry_NoBtiNoPac = {{
     { 0x90000010u, 0x9f00001fu }, // adrp x16, :page:&.got.plt[index + 3]
     { 0xf9400211u, 0xffc003ffu }, // ldr x17, [x16, :lo12:&.got.plt[index + 3]]
     { 0x91000210u, 0xffc003ffu }, // add x16, x16, :lo12:&.got.plt[index + 3]
     { 0xd61f0220u, 0xffffffffu }, // br x17
 }};
 
-static constexpr const std::array<InstructionMask, 5> cPltEntry_BtiNoPac = {{
+static constexpr std::array<InstructionMask, 5> cPltEntry_BtiNoPac = {{
     { 0xd503245fu, 0xffffffffu }, // bti c
     { 0x90000010u, 0x9f00001fu }, // adrp x16, :page:&.got.plt[index + 3]
     { 0xf9400211u, 0xffc003ffu }, // ldr x17, [x16, :lo12:&.got.plt[index + 3]]
@@ -440,7 +440,7 @@ static constexpr const std::array<InstructionMask, 5> cPltEntry_BtiNoPac = {{
     { 0xd61f0220u, 0xffffffffu }, // br x17
 }};
 
-static constexpr const std::array<InstructionMask, 5> cPltEntry_NoBtiPac = {{
+static constexpr std::array<InstructionMask, 5> cPltEntry_NoBtiPac = {{
     { 0x90000010u, 0x9f00001fu }, // adrp x16, :page:&.got.plt[index + 3]
     { 0xf9400211u, 0xffc003ffu }, // ldr x17, [x16, :lo12:&.got.plt[index + 3]]
     { 0x91000210u, 0xffc003ffu }, // add x16, x16, :lo12:&.got.plt[index + 3]
@@ -448,7 +448,7 @@ static constexpr const std::array<InstructionMask, 5> cPltEntry_NoBtiPac = {{
     { 0xd61f0220u, 0xffffffffu }, // br x17
 }};
 
-static constexpr const std::array<InstructionMask, 6> cPltEntry_BtiPac = {{
+static constexpr std::array<InstructionMask, 6> cPltEntry_BtiPac = {{
     { 0xd503245fu, 0xffffffffu }, // bti c
     { 0x90000010u, 0x9f00001fu }, // adrp x16, :page:&.got.plt[index + 3]
     { 0xf9400211u, 0xffc003ffu }, // ldr x17, [x16, :lo12:&.got.plt[index + 3]]
@@ -457,7 +457,7 @@ static constexpr const std::array<InstructionMask, 6> cPltEntry_BtiPac = {{
     { 0xd61f0220u, 0xffffffffu }, // br x17
 }};
 
-static constexpr const Pattern cPltEntryMasks[4] = {
+static constexpr Pattern cPltEntryMasks[4] = {
     { cPltEntry_NoBtiNoPac, 1, 2 }, // no BTI, no PAC
     { cPltEntry_BtiNoPac  , 1, 2 }, // BTI, no PAC
     { cPltEntry_NoBtiPac  , 2, 3 }, // no BTI, PAC
