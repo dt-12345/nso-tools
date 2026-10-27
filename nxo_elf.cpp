@@ -199,7 +199,7 @@ public:
         addNullSection();
     }
 
-    auto build(const NXOFile& nso) -> void;
+    auto build(const NXOFile& nxo) -> void;
     auto write(std::string_view path) const -> void;
 
 private:
@@ -302,7 +302,7 @@ private:
     };
 
     struct Context {
-        const NXOFile& nso;
+        const NXOFile& nxo;
         std::size_t header_offset = 0;
         const ModuleHeader* header = nullptr;
         std::uint32_t rocrt_version = 0;
@@ -362,7 +362,7 @@ private:
         mProgBits.emplace_back(data, align);
     }
 
-    auto splitSections(const NXOFile& nso) -> void;
+    auto splitSections(const NXOFile& nxo) -> void;
     auto splitText(Context& ctx) -> void;
     auto splitRodata(Context& ctx) -> void;
     auto splitData(Context& ctx) -> void;
@@ -523,7 +523,7 @@ static auto MatchAllPltEntries(std::span<const std::uint8_t> data, const Pattern
 }
 
 static auto ReadEhFrame(
-    const NXOFile& nso,
+    const NXOFile& nxo,
     std::span<const std::uint8_t> data,
     std::size_t eh_frame_hdr_start,
     std::size_t eh_frame_start,
@@ -536,24 +536,24 @@ static auto ReadEhFrame(
     Encoding lsda_encoding = DW_EH_PE_omit;
     Encoding ptr_encoding = DW_EH_PE_omit;
     while (true) {
-        if (!nso.isInRodata(current_eh_frame_offset, sizeof(std::uint32_t))) {
+        if (!nxo.isInRodata(current_eh_frame_offset, sizeof(std::uint32_t))) {
             Panic("End of .rodata reached before a terminator was found");
         }
 
-        std::uint64_t length = *reinterpret_cast<const std::uint32_t*>(data.data() + current_eh_frame_offset - nso.getRodataOffset());
+        std::uint64_t length = *reinterpret_cast<const std::uint32_t*>(data.data() + current_eh_frame_offset - nxo.getRodataOffset());
         current_eh_frame_offset += sizeof(std::uint32_t);
         if (length == 0) {
             break;
         } else if (length == 0xffff'ffff) {
-            if (!nso.isInRodata(current_eh_frame_offset, sizeof(std::uint64_t))) {
+            if (!nxo.isInRodata(current_eh_frame_offset, sizeof(std::uint64_t))) {
                 Panic("End of .rodata reached before a terminator was found ", std::hex, current_eh_frame_offset);
             }
 
-            length = *reinterpret_cast<const std::uint64_t*>(data.data() + current_eh_frame_offset - nso.getRodataOffset());
+            length = *reinterpret_cast<const std::uint64_t*>(data.data() + current_eh_frame_offset - nxo.getRodataOffset());
             current_eh_frame_offset += sizeof(std::uint64_t);
         }
 
-        if (!nso.isInRodata(current_eh_frame_offset, length)) {
+        if (!nxo.isInRodata(current_eh_frame_offset, length)) {
             Panic(".eh_frame entry extends past end of .rodata");
         }
 
@@ -561,7 +561,7 @@ static auto ReadEhFrame(
             Panic(".eh_frame entry is too small to be valid");
         }
 
-        const auto id = *reinterpret_cast<const std::uint32_t*>(data.data() + current_eh_frame_offset - nso.getRodataOffset());
+        const auto id = *reinterpret_cast<const std::uint32_t*>(data.data() + current_eh_frame_offset - nxo.getRodataOffset());
         if (id == 0) {
             // CIE
             if (length < sizeof(std::uint32_t) + sizeof(std::uint8_t)) {
@@ -569,18 +569,18 @@ static auto ReadEhFrame(
             }
 
             const auto version_offset = current_eh_frame_offset + sizeof(std::uint32_t);
-            if (*reinterpret_cast<const std::uint8_t*>(data.data() + version_offset - nso.getRodataOffset()) != 1) {
+            if (*reinterpret_cast<const std::uint8_t*>(data.data() + version_offset - nxo.getRodataOffset()) != 1) {
                 Panic("Invalid CIE version");
             }
 
             auto aug_str_offset = version_offset + sizeof(std::uint8_t);
             std::string aug_str = "";
             while (true) {
-                if (!nso.isInRodata(aug_str_offset, sizeof(char))) {
+                if (!nxo.isInRodata(aug_str_offset, sizeof(char))) {
                     Panic(".eh_frame CIE augmentation string was not null-terminated before the end of .rodata");
                 }
 
-                const auto c = *reinterpret_cast<const std::uint8_t*>(data.data() + aug_str_offset++ - nso.getRodataOffset());
+                const auto c = *reinterpret_cast<const std::uint8_t*>(data.data() + aug_str_offset++ - nxo.getRodataOffset());
                 if (c == '\0') {
                     break;
                 }
@@ -599,14 +599,14 @@ static auto ReadEhFrame(
             }
 
             if (aug_str.substr(aug_str_index).starts_with('z')) {
-                current_offset += GetLEB128Size(std::span(data).subspan(current_offset - nso.getRodataOffset())); // code alignment factor
-                current_offset += GetLEB128Size(std::span(data).subspan(current_offset - nso.getRodataOffset())); // data alignment factor
+                current_offset += GetLEB128Size(std::span(data).subspan(current_offset - nxo.getRodataOffset())); // code alignment factor
+                current_offset += GetLEB128Size(std::span(data).subspan(current_offset - nxo.getRodataOffset())); // data alignment factor
                 current_offset += sizeof(std::uint8_t); // return address register
 
-                const auto aug_size = ReadLEB128<false>(std::span(data).subspan(current_offset - nso.getRodataOffset()));
-                current_offset += GetLEB128Size(std::span(data).subspan(current_offset - nso.getRodataOffset()));
+                const auto aug_size = ReadLEB128<false>(std::span(data).subspan(current_offset - nxo.getRodataOffset()));
+                current_offset += GetLEB128Size(std::span(data).subspan(current_offset - nxo.getRodataOffset()));
 
-                if (!nso.isInRodata(current_offset, aug_size)) {
+                if (!nxo.isInRodata(current_offset, aug_size)) {
                     Panic(".eh_frame CIE augmentation data does not fit in .rodata ", std::hex, current_offset, " ", aug_size, " ", aug_str);
                 }
 
@@ -619,9 +619,9 @@ static auto ReadEhFrame(
                             }
 
                             const auto offset = current_offset + aug_data_offset;
-                            const auto personality_encoding = *reinterpret_cast<const Encoding*>(data.data() + offset - nso.getRodataOffset());
+                            const auto personality_encoding = *reinterpret_cast<const Encoding*>(data.data() + offset - nxo.getRodataOffset());
                             aug_data_offset += sizeof(Encoding);
-                            aug_data_offset += GetSize(personality_encoding, std::span(data).subspan(offset + sizeof(Encoding) - nso.getRodataOffset()));
+                            aug_data_offset += GetSize(personality_encoding, std::span(data).subspan(offset + sizeof(Encoding) - nxo.getRodataOffset()));
                             break;
                         }
                         case 'L': {
@@ -630,7 +630,7 @@ static auto ReadEhFrame(
                             }
 
                             has_lsda = true;
-                            lsda_encoding = *reinterpret_cast<const Encoding*>(data.data() + current_offset + aug_data_offset - nso.getRodataOffset());
+                            lsda_encoding = *reinterpret_cast<const Encoding*>(data.data() + current_offset + aug_data_offset - nxo.getRodataOffset());
                             aug_data_offset += sizeof(Encoding);
                             break;
                         }
@@ -639,7 +639,7 @@ static auto ReadEhFrame(
                                 Panic(".eh_frame CIE augmentation data is too small");
                             }
 
-                            ptr_encoding = *reinterpret_cast<const Encoding*>(data.data() + current_offset + aug_data_offset - nso.getRodataOffset());
+                            ptr_encoding = *reinterpret_cast<const Encoding*>(data.data() + current_offset + aug_data_offset - nxo.getRodataOffset());
                             aug_data_offset += sizeof(Encoding);
                             break;
                         }
@@ -659,13 +659,13 @@ static auto ReadEhFrame(
             // FDE
             if (has_lsda) {
                 auto fde_offset = current_eh_frame_offset + sizeof(std::uint32_t);
-                fde_offset += GetSize(ptr_encoding, std::span(data).subspan(fde_offset - nso.getRodataOffset())); // PC begin
-                fde_offset += GetSize(ptr_encoding, std::span(data).subspan(fde_offset - nso.getRodataOffset())); // PC range
+                fde_offset += GetSize(ptr_encoding, std::span(data).subspan(fde_offset - nxo.getRodataOffset())); // PC begin
+                fde_offset += GetSize(ptr_encoding, std::span(data).subspan(fde_offset - nxo.getRodataOffset())); // PC range
 
-                const auto aug_size = ReadLEB128<false>(std::span(data).subspan(fde_offset - nso.getRodataOffset()));
-                fde_offset += GetLEB128Size(std::span(data).subspan(fde_offset - nso.getRodataOffset()));
+                const auto aug_size = ReadLEB128<false>(std::span(data).subspan(fde_offset - nxo.getRodataOffset()));
+                fde_offset += GetLEB128Size(std::span(data).subspan(fde_offset - nxo.getRodataOffset()));
 
-                if (!nso.isInRodata(fde_offset, aug_size)) {
+                if (!nxo.isInRodata(fde_offset, aug_size)) {
                     Panic(".eh_frame FDE augmentation data does not fit in .rodata");
                 }
 
@@ -677,7 +677,7 @@ static auto ReadEhFrame(
                     default: Panic("Invalid pointer apply type");
                 }
 
-                const auto lsda_ptr_data = std::span(data).subspan(fde_offset - nso.getRodataOffset());
+                const auto lsda_ptr_data = std::span(data).subspan(fde_offset - nxo.getRodataOffset());
                 if (lsda_encoding & IsSignedMask) {
                     lsda_offset = static_cast<std::size_t>(static_cast<std::int64_t>(lsda_offset) + ReadSigned(lsda_encoding, lsda_ptr_data));
                 } else {
@@ -693,49 +693,49 @@ static auto ReadEhFrame(
     }
 
     if (min_lsda != std::numeric_limits<std::size_t>::max() && max_lsda != std::numeric_limits<std::size_t>::min()) {
-        if (!nso.isInRodata(min_lsda) || !nso.isInRodata(max_lsda)) {
+        if (!nxo.isInRodata(min_lsda) || !nxo.isInRodata(max_lsda)) {
             Panic("Language-specific data area must be in .rodata");
         }
 
         auto offset = max_lsda;
-        if (!nso.isInRodata(offset, sizeof(Encoding))) {
+        if (!nxo.isInRodata(offset, sizeof(Encoding))) {
             Panic("Language-specific data area does not fit in .rodata");
         }
 
-        const auto region_begin_encoding = *reinterpret_cast<const Encoding*>(data.data() + offset - nso.getRodataOffset());
+        const auto region_begin_encoding = *reinterpret_cast<const Encoding*>(data.data() + offset - nxo.getRodataOffset());
         offset += sizeof(Encoding);
         if (region_begin_encoding != DW_EH_PE_omit) {
-            offset += GetSize(region_begin_encoding, std::span(data).subspan(offset - nso.getRodataOffset()));
+            offset += GetSize(region_begin_encoding, std::span(data).subspan(offset - nxo.getRodataOffset()));
         }
 
-        if (!nso.isInRodata(offset, sizeof(Encoding))) {
+        if (!nxo.isInRodata(offset, sizeof(Encoding))) {
             Panic("Language-specific data area does not fit in .rodata");
         }
 
-        const auto type_table_encoding = *reinterpret_cast<const Encoding*>(data.data() + offset - nso.getRodataOffset());
+        const auto type_table_encoding = *reinterpret_cast<const Encoding*>(data.data() + offset - nxo.getRodataOffset());
         offset += sizeof(Encoding);
         if (type_table_encoding != DW_EH_PE_omit) {
             // if we have a type table, then it must come last (the type table offset is to the end of the type table)
-            offset += ReadLEB128<false>(std::span(data).subspan(offset - nso.getRodataOffset()));
-            offset += GetLEB128Size(std::span(data).subspan(offset - nso.getRodataOffset())); // this offset is relative to the end of this offset
+            offset += ReadLEB128<false>(std::span(data).subspan(offset - nxo.getRodataOffset()));
+            offset += GetLEB128Size(std::span(data).subspan(offset - nxo.getRodataOffset())); // this offset is relative to the end of this offset
         } else {
-            if (!nso.isInRodata(offset, sizeof(Encoding))) {
+            if (!nxo.isInRodata(offset, sizeof(Encoding))) {
                 Panic("Language-specific data are does not fit in .rodata");
             }
-            const auto call_site_encoding = *reinterpret_cast<const Encoding*>(data.data() + offset - nso.getRodataOffset());
+            const auto call_site_encoding = *reinterpret_cast<const Encoding*>(data.data() + offset - nxo.getRodataOffset());
             offset += sizeof(Encoding);
 
-            const auto call_site_table_size = ReadLEB128<false>(std::span(data).subspan(offset - nso.getRodataOffset()));
-            offset += GetLEB128Size(std::span(data).subspan(offset - nso.getRodataOffset()));
+            const auto call_site_table_size = ReadLEB128<false>(std::span(data).subspan(offset - nxo.getRodataOffset()));
+            offset += GetLEB128Size(std::span(data).subspan(offset - nxo.getRodataOffset()));
     
             // see if we have any actions to handle
             std::size_t max_action = 0;
             for (auto table_offset = offset; table_offset < offset + call_site_table_size; /* ... */) {
-                table_offset += GetSize(call_site_encoding, std::span(data).subspan(table_offset - nso.getRodataOffset())); // pos
-                table_offset += GetSize(call_site_encoding, std::span(data).subspan(table_offset - nso.getRodataOffset())); // range
-                table_offset += GetSize(call_site_encoding, std::span(data).subspan(table_offset - nso.getRodataOffset())); // landing pad
-                const auto action = ReadLEB128<false>(std::span(data).subspan(table_offset - nso.getRodataOffset()));
-                table_offset += GetLEB128Size(std::span(data).subspan(table_offset - nso.getRodataOffset()));
+                table_offset += GetSize(call_site_encoding, std::span(data).subspan(table_offset - nxo.getRodataOffset())); // pos
+                table_offset += GetSize(call_site_encoding, std::span(data).subspan(table_offset - nxo.getRodataOffset())); // range
+                table_offset += GetSize(call_site_encoding, std::span(data).subspan(table_offset - nxo.getRodataOffset())); // landing pad
+                const auto action = ReadLEB128<false>(std::span(data).subspan(table_offset - nxo.getRodataOffset()));
+                table_offset += GetLEB128Size(std::span(data).subspan(table_offset - nxo.getRodataOffset()));
                 if (action != 0) { // not cleanup
                     max_action = std::max(action - 1, max_action);
                 }
@@ -745,9 +745,9 @@ static auto ReadEhFrame(
 
             if (max_action != 0) {
                 offset += max_action;
-                offset += GetLEB128Size(std::span(data).subspan(offset - nso.getRodataOffset())); // filter
-                const auto next_offset = ReadLEB128<false>(std::span(data).subspan(offset - nso.getRodataOffset()));
-                offset += GetLEB128Size(std::span(data).subspan(offset - nso.getRodataOffset()));
+                offset += GetLEB128Size(std::span(data).subspan(offset - nxo.getRodataOffset())); // filter
+                const auto next_offset = ReadLEB128<false>(std::span(data).subspan(offset - nxo.getRodataOffset()));
+                offset += GetLEB128Size(std::span(data).subspan(offset - nxo.getRodataOffset()));
                 offset += next_offset;
             }
         }
@@ -761,7 +761,7 @@ static auto ReadEhFrame(
 }
 
 auto ELFBuilder::splitText(Context& ctx) -> void {
-    const auto& segment_data = ctx.nso.getText();
+    const auto& segment_data = ctx.nxo.getText();
 
     if (segment_data.size() < cMinimumModuleHeaderLocationSize) {
         Panic("Invalid .text segment");
@@ -782,7 +782,7 @@ auto ELFBuilder::splitText(Context& ctx) -> void {
         // if no .plt found, then assign the entire executable region to .text
         auto& shdr = addSection(SHT_PROGBITS, SectionType_EX);
         shdr.sh_flags = SHF_ALLOC | SHF_EXECINSTR;
-        shdr.sh_addr = ctx.nso.getTextOffset();
+        shdr.sh_addr = ctx.nxo.getTextOffset();
         shdr.sh_offset = mPhdrs[Segment_Text].p_offset;
         shdr.sh_size = segment_data.size();
         shdr.sh_link = 0;
@@ -793,7 +793,7 @@ auto ELFBuilder::splitText(Context& ctx) -> void {
     } else {
         auto& shdr = addSection(SHT_PROGBITS, SectionType_EX);
         shdr.sh_flags = SHF_ALLOC | SHF_EXECINSTR;
-        shdr.sh_addr = ctx.nso.getTextOffset();
+        shdr.sh_addr = ctx.nxo.getTextOffset();
         shdr.sh_offset = mPhdrs[Segment_Text].p_offset;
         shdr.sh_size = plt_begin;
         shdr.sh_link = 0;
@@ -809,7 +809,7 @@ auto ELFBuilder::splitText(Context& ctx) -> void {
     );
     auto& shdr = addSection(SHT_PROGBITS, SectionType_PLT);
     shdr.sh_flags = SHF_ALLOC | SHF_EXECINSTR | 2 << 0x1c; // not sure what the SHF_MASKPROC flags are here
-    shdr.sh_addr = ctx.nso.getTextOffset() + plt_begin;
+    shdr.sh_addr = ctx.nxo.getTextOffset() + plt_begin;
     shdr.sh_offset = mPhdrs[Segment_Text].p_offset + plt_begin;
     shdr.sh_size = header_pat.size_bytes() + total_entry_size;
     shdr.sh_link = 0;
@@ -822,7 +822,7 @@ auto ELFBuilder::splitText(Context& ctx) -> void {
         // TODO: some games have functions after the end of the PLT, is this another section?
         auto& shdr = addSection(SHT_PROGBITS, ".text.1");
         shdr.sh_flags = SHF_ALLOC | SHF_EXECINSTR;
-        shdr.sh_addr = ctx.nso.getTextOffset() + total_size;
+        shdr.sh_addr = ctx.nxo.getTextOffset() + total_size;
         shdr.sh_offset = mPhdrs[Segment_Text].p_offset + total_size;
         shdr.sh_size = segment_data.size() - total_size;
         shdr.sh_link = 0;
@@ -833,7 +833,7 @@ auto ELFBuilder::splitText(Context& ctx) -> void {
 }
 
 auto ELFBuilder::splitRodata(Context& ctx) -> void {
-    const auto& segment_data = ctx.nso.getRodata();
+    const auto& segment_data = ctx.nxo.getRodata();
     const auto start_offset = mPhdrs[Segment_Ro].p_offset;
 
     // .rocrt.initro
@@ -846,7 +846,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         if (header_loc->entry == 1) { // failsafe for unofficial NSOs that pass the rocrt version check but don't actually have this section
             auto& shdr = addSection(SHT_PROGBITS, SectionType_ROCRT_INITRO);
             shdr.sh_flags = SHF_ALLOC;
-            shdr.sh_addr = ctx.nso.getRodataOffset();
+            shdr.sh_addr = ctx.nxo.getRodataOffset();
             shdr.sh_offset = start_offset;
             shdr.sh_size = sizeof(ModuleHeaderLocation);
             shdr.sh_link = 0;
@@ -854,12 +854,12 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
             shdr.sh_addralign = alignof(ModuleHeaderLocation);
             shdr.sh_entsize = 0;
         } else {
-            if (!ctx.nso.isInText(header_loc->rocrt_info_offset, cMinimumModuleHeaderLocationSize)) {
+            if (!ctx.nxo.isInText(header_loc->rocrt_info_offset, cMinimumModuleHeaderLocationSize)) {
                 Panic(".rocrt.init must be in .text");
             }
 
             ctx.rocrt_version = 0;
-            if (ctx.nso.isInText(header_loc->rocrt_info_offset, cMinimumModuleHeaderLocationSize + sizeof(LibNXExtension))) {
+            if (ctx.nxo.isInText(header_loc->rocrt_info_offset, cMinimumModuleHeaderLocationSize + sizeof(LibNXExtension))) {
                 const auto ext = reinterpret_cast<const LibNXExtension*>(segment_data.data() + header_loc->rocrt_info_offset + cMinimumModuleHeaderLocationSize);
                 if (std::memcmp(ext->signature, cLibNXMagic, sizeof(cLibNXMagic)) == 0) {
                     ctx.libnx_extension = ext;
@@ -870,15 +870,15 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
     }
 
     // .nx_debuglink
-    if (const auto range = ctx.nso.findModuleNameRange()) {
-        if (!ctx.nso.isInRodata(range->start, range->size)) {
+    if (const auto range = ctx.nxo.findModuleNameRange()) {
+        if (!ctx.nxo.isInRodata(range->start, range->size)) {
             Panic(".nx_debuglink must be in .rodata");
         }
 
         auto& shdr = addSection(SHT_PROGBITS, SectionType_NX_DEBUGLINK);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = range->start;
-        shdr.sh_offset = start_offset + range->start - ctx.nso.getRodataOffset();
+        shdr.sh_offset = start_offset + range->start - ctx.nxo.getRodataOffset();
         shdr.sh_size = range->size;
         shdr.sh_link = 0;
         shdr.sh_info = 0;
@@ -890,14 +890,14 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
 
     // .rocrt.info
     if (ctx.rocrt_version == 1) {
-        if (!ctx.nso.isInRodata(ctx.header_offset, sizeof(ModuleHeader))) {
+        if (!ctx.nxo.isInRodata(ctx.header_offset, sizeof(ModuleHeader))) {
             Panic(".rocrt.info must be in .rodata");
         }
 
         auto& shdr = addSection(SHT_PROGBITS, SectionType_ROCRT_INFO);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = ctx.header_offset;
-        shdr.sh_offset = start_offset + ctx.header_offset - ctx.nso.getRodataOffset();
+        shdr.sh_offset = start_offset + ctx.header_offset - ctx.nxo.getRodataOffset();
         shdr.sh_size = sizeof(ModuleHeader);
         shdr.sh_link = 0;
         shdr.sh_info = 0;
@@ -908,7 +908,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         const auto initro = reinterpret_cast<const ModuleHeaderLocation*>(segment_data.data());
         // these two structures *should* be adjacent to each other, but to avoid creating an invalid section,
         // make sure that the version starts where the header ends
-        if (initro->rocrt_version_offset == ctx.header_offset - ctx.nso.getRodataOffset() + sizeof(ModuleHeader)) {
+        if (initro->rocrt_version_offset == ctx.header_offset - ctx.nxo.getRodataOffset() + sizeof(ModuleHeader)) {
             shdr.sh_size += sizeof(RocrtVersion);
         }
     } else {
@@ -920,11 +920,11 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
 
     // .rel.dyn
     if (ctx.rel && ctx.rel_size) {
-        if (!ctx.nso.isInRodata(ctx.rel->d_un.d_ptr, ctx.rel_size->d_un.d_val)) {
+        if (!ctx.nxo.isInRodata(ctx.rel->d_un.d_ptr, ctx.rel_size->d_un.d_val)) {
             Panic(".rel.dyn must be in .rodata");
         }
 
-        const auto rodata_offset = ctx.rel->d_un.d_ptr - ctx.nso.getRodataOffset();
+        const auto rodata_offset = ctx.rel->d_un.d_ptr - ctx.nxo.getRodataOffset();
 
         rel_index = mShdrs.size();
         auto& shdr = addSection(SHT_REL, SectionType_REL_DYN);
@@ -945,11 +945,11 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
 
     // .rela.dyn
     if (ctx.rela && ctx.rela_size) {
-        if (!ctx.nso.isInRodata(ctx.rela->d_un.d_ptr, ctx.rela_size->d_un.d_val)) {
+        if (!ctx.nxo.isInRodata(ctx.rela->d_un.d_ptr, ctx.rela_size->d_un.d_val)) {
             Panic(".rela.dyn must be in .rodata");
         }
 
-        const auto rodata_offset = ctx.rela->d_un.d_ptr - ctx.nso.getRodataOffset();
+        const auto rodata_offset = ctx.rela->d_un.d_ptr - ctx.nxo.getRodataOffset();
 
         rela_index = mShdrs.size();
         auto& shdr = addSection(SHT_RELA, SectionType_RELA_DYN);
@@ -969,11 +969,11 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
     }
 
     if (ctx.plt_rel && ctx.plt_rel_size && ctx.plt_rel_type) {
-        const auto rodata_offset = ctx.plt_rel->d_un.d_ptr - ctx.nso.getRodataOffset();
+        const auto rodata_offset = ctx.plt_rel->d_un.d_ptr - ctx.nxo.getRodataOffset();
         switch (ctx.plt_rel_type->d_un.d_val) {
             // .rel.plt
             case DT_REL: {
-                if (!ctx.nso.isInRodata(ctx.plt_rel->d_un.d_ptr, ctx.plt_rel_size->d_un.d_val)) {
+                if (!ctx.nxo.isInRodata(ctx.plt_rel->d_un.d_ptr, ctx.plt_rel_size->d_un.d_val)) {
                     Panic(".rel.plt must be in .rodata");
                 }
 
@@ -996,7 +996,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
             }
             // .rela.plt
             case DT_RELA: {
-                if (!ctx.nso.isInRodata(ctx.plt_rel->d_un.d_ptr, ctx.plt_rel_size->d_un.d_val)) {
+                if (!ctx.nxo.isInRodata(ctx.plt_rel->d_un.d_ptr, ctx.plt_rel_size->d_un.d_val)) {
                     Panic(".rela.plt must be in .rodata");
                 }
 
@@ -1024,11 +1024,11 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
 
     // .relr.dyn
     if (ctx.relr && ctx.relr_size) {
-        if (!ctx.nso.isInRodata(ctx.relr->d_un.d_ptr, ctx.relr_size->d_un.d_val)) {
+        if (!ctx.nxo.isInRodata(ctx.relr->d_un.d_ptr, ctx.relr_size->d_un.d_val)) {
             Panic(".relr.dyn must be in .rodata");
         }
 
-        const auto rodata_offset = ctx.relr->d_un.d_ptr - ctx.nso.getRodataOffset();
+        const auto rodata_offset = ctx.relr->d_un.d_ptr - ctx.nxo.getRodataOffset();
 
         auto& shdr = addSection(SHT_RELR, SectionType_RELR_DYN);
         shdr.sh_flags = SHF_ALLOC;
@@ -1063,16 +1063,16 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
 
     // .hash
     if (ctx.hash) {
-        if (!ctx.nso.isInRodata(ctx.hash->d_un.d_ptr, sizeof(ElfHashTable))) {
+        if (!ctx.nxo.isInRodata(ctx.hash->d_un.d_ptr, sizeof(ElfHashTable))) {
             Panic(".hash must be in .rodata");
         }
 
-        const auto hash_table = reinterpret_cast<const ElfHashTable*>(segment_data.data() + ctx.hash->d_un.d_ptr - ctx.nso.getRodataOffset());
+        const auto hash_table = reinterpret_cast<const ElfHashTable*>(segment_data.data() + ctx.hash->d_un.d_ptr - ctx.nxo.getRodataOffset());
         const auto total_size = sizeof(ElfHashTable) + hash_table->nbucket * sizeof(std::uint32_t) + hash_table->nchain * sizeof(std::uint32_t);
 
         sym_count = hash_table->nchain;
 
-        if (!ctx.nso.isInRodata(ctx.hash->d_un.d_ptr, total_size)) {
+        if (!ctx.nxo.isInRodata(ctx.hash->d_un.d_ptr, total_size)) {
             Panic(".hash must be in .rodata");
         }
 
@@ -1080,7 +1080,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         auto& shdr = addSection(SHT_HASH, SectionType_HASH);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = ctx.hash->d_un.d_ptr;
-        shdr.sh_offset = start_offset + ctx.hash->d_un.d_ptr - ctx.nso.getRodataOffset();
+        shdr.sh_offset = start_offset + ctx.hash->d_un.d_ptr - ctx.nxo.getRodataOffset();
         shdr.sh_size = total_size;
         shdr.sh_link = 0; // linked to .dynsym
         shdr.sh_info = 0;
@@ -1090,16 +1090,16 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
 
     // .gnu.hash
     if (ctx.gnu_hash) {
-        if (!ctx.nso.isInRodata(ctx.gnu_hash->d_un.d_ptr, sizeof(GnuHashTable))) {
+        if (!ctx.nxo.isInRodata(ctx.gnu_hash->d_un.d_ptr, sizeof(GnuHashTable))) {
             Panic(".gnu.hash must be in .rodata");
         }
 
-        const auto base_offset = ctx.gnu_hash->d_un.d_ptr - ctx.nso.getRodataOffset();
+        const auto base_offset = ctx.gnu_hash->d_un.d_ptr - ctx.nxo.getRodataOffset();
         const auto hash_table = reinterpret_cast<const GnuHashTable*>(segment_data.data() + base_offset);
         const auto bucket_offset = sizeof(GnuHashTable) + hash_table->bloom_size * sizeof(std::uint64_t);
         auto total_size = bucket_offset + hash_table->nbucket * sizeof(std::uint32_t);
 
-        if (!ctx.nso.isInRodata(ctx.gnu_hash->d_un.d_ptr, total_size)) {
+        if (!ctx.nxo.isInRodata(ctx.gnu_hash->d_un.d_ptr, total_size)) {
             Panic(".gnu.hash must be in .rodata");
         }
 
@@ -1112,7 +1112,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         if (max_bucket >= hash_table->sym_offset) {
             total_size += (max_bucket - hash_table->sym_offset) * sizeof(std::uint32_t);
 
-            if (!ctx.nso.isInRodata(ctx.gnu_hash->d_un.d_ptr, total_size + sizeof(std::uint32_t))) {
+            if (!ctx.nxo.isInRodata(ctx.gnu_hash->d_un.d_ptr, total_size + sizeof(std::uint32_t))) {
                 Panic(".gnu.hash must be in .rodata");
             }
 
@@ -1121,7 +1121,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
             while ((*current_pos++ & 1) == 0) {
                 total_size += sizeof(std::uint32_t);
                 ++sym_count;
-                if (!ctx.nso.isInRodata(ctx.gnu_hash->d_un.d_ptr, total_size + sizeof(std::uint32_t))) {
+                if (!ctx.nxo.isInRodata(ctx.gnu_hash->d_un.d_ptr, total_size + sizeof(std::uint32_t))) {
                     Panic(".rodata ends before the end of .gnu.hash was found");
                 }
             }
@@ -1150,7 +1150,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
     // .dynsym
     if (ctx.dyn_sym) {
         const auto total_size = sym_count * sizeof(Elf64_Sym);
-        if (!ctx.nso.isInRodata(ctx.dyn_sym->d_un.d_ptr, total_size)) {
+        if (!ctx.nxo.isInRodata(ctx.dyn_sym->d_un.d_ptr, total_size)) {
             Panic(".dynsym must be in .rodata");
         }
 
@@ -1158,7 +1158,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         auto& shdr = addSection(SHT_DYNSYM, SectionType_DYN_SYM);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = ctx.dyn_sym->d_un.d_ptr;
-        shdr.sh_offset = start_offset + ctx.dyn_sym->d_un.d_ptr - ctx.nso.getRodataOffset();
+        shdr.sh_offset = start_offset + ctx.dyn_sym->d_un.d_ptr - ctx.nxo.getRodataOffset();
         shdr.sh_size = total_size;
         shdr.sh_link = 0; // linked to .dynstr
         shdr.sh_info = 0;
@@ -1176,7 +1176,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
 
     // .dynstr
     if (ctx.dyn_str && ctx.dyn_str_size) {
-        if (!ctx.nso.isInRodata(ctx.dyn_str->d_un.d_ptr, ctx.dyn_str_size->d_un.d_val)) {
+        if (!ctx.nxo.isInRodata(ctx.dyn_str->d_un.d_ptr, ctx.dyn_str_size->d_un.d_val)) {
             Panic(".dynstr must be in .rodata");
         }
 
@@ -1184,7 +1184,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         auto& shdr = addSection(SHT_STRTAB, SectionType_DYN_STR);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = ctx.dyn_str->d_un.d_ptr;
-        shdr.sh_offset = start_offset + ctx.dyn_str->d_un.d_ptr - ctx.nso.getRodataOffset();
+        shdr.sh_offset = start_offset + ctx.dyn_str->d_un.d_ptr - ctx.nxo.getRodataOffset();
         shdr.sh_size = ctx.dyn_str_size->d_un.d_val;
         shdr.sh_link = 0;
         shdr.sh_info = 0;
@@ -1202,13 +1202,13 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
 
     const auto eh_frame_hdr_size = ctx.header->eh_frame_hdr_end - ctx.header->eh_frame_hdr_start;
     const auto eh_frame_hdr_start = ctx.header_offset + ctx.header->eh_frame_hdr_start;
-    if (!ctx.nso.isInRodata(eh_frame_hdr_start, eh_frame_hdr_size)) {
+    if (!ctx.nxo.isInRodata(eh_frame_hdr_start, eh_frame_hdr_size)) {
         Panic(".eh_frame_hdr must be in .rodata");
     }
 
     std::size_t max_offset = 0;
     for (const auto& shdr : mShdrs) {
-        if (!ctx.nso.isInRodata(shdr.sh_addr, shdr.sh_size)) {
+        if (!ctx.nxo.isInRodata(shdr.sh_addr, shdr.sh_size)) {
             continue;
         }
         max_offset = std::max(shdr.sh_addr + shdr.sh_size, max_offset);
@@ -1226,7 +1226,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         auto& shdr = addSection(SHT_PROGBITS, SectionType_EH_FRAME_HDR);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = eh_frame_hdr_start;
-        shdr.sh_offset = start_offset + eh_frame_hdr_start - ctx.nso.getRodataOffset();
+        shdr.sh_offset = start_offset + eh_frame_hdr_start - ctx.nxo.getRodataOffset();
         shdr.sh_size = eh_frame_hdr_size;
         shdr.sh_link = 0;
         shdr.sh_info = 0;
@@ -1235,7 +1235,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
 
         exception_handling_end = std::max(eh_frame_hdr_start + eh_frame_hdr_size, exception_handling_end);
 
-        const auto eh_frame_hdr = reinterpret_cast<const EhFrameHdr*>(segment_data.data() + eh_frame_hdr_start - ctx.nso.getRodataOffset());
+        const auto eh_frame_hdr = reinterpret_cast<const EhFrameHdr*>(segment_data.data() + eh_frame_hdr_start - ctx.nxo.getRodataOffset());
         if (eh_frame_hdr->version != 1) {
             Panic("Invalid .eh_frame_hdr version");
         }
@@ -1249,7 +1249,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
                 default: Panic("Invalid pointer apply type");
             }
 
-            const auto ptr_enc_data = std::span(segment_data).subspan(eh_frame_hdr_start - ctx.nso.getRodataOffset() + sizeof(EhFrameHdr));
+            const auto ptr_enc_data = std::span(segment_data).subspan(eh_frame_hdr_start - ctx.nxo.getRodataOffset() + sizeof(EhFrameHdr));
             if (eh_frame_hdr->eh_frame_ptr_enc & IsSignedMask) {
                 eh_frame_offset = static_cast<std::size_t>(static_cast<std::int64_t>(eh_frame_offset) + ReadSigned(eh_frame_hdr->eh_frame_ptr_enc, ptr_enc_data));
             } else {
@@ -1262,12 +1262,12 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
 
     // .eh_frame
     if (eh_frame_offset != std::numeric_limits<std::size_t>::max()) {
-        if (!ctx.nso.isInRodata(eh_frame_offset)) {
+        if (!ctx.nxo.isInRodata(eh_frame_offset)) {
             Panic(".eh_frame must be in .rodata");
         }
 
-        const auto frame_size = ReadEhFrame(ctx.nso, segment_data, eh_frame_hdr_start, eh_frame_offset, lsda_range);
-        if (!ctx.nso.isInRodata(eh_frame_offset, frame_size)) {
+        const auto frame_size = ReadEhFrame(ctx.nxo, segment_data, eh_frame_hdr_start, eh_frame_offset, lsda_range);
+        if (!ctx.nxo.isInRodata(eh_frame_offset, frame_size)) {
             Panic(".eh_frame must be in .rodata");
         }
 
@@ -1276,7 +1276,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         auto& shdr = addSection(SHT_PROGBITS, SectionType_EH_FRAME);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = eh_frame_offset;
-        shdr.sh_offset = start_offset + eh_frame_offset - ctx.nso.getRodataOffset();
+        shdr.sh_offset = start_offset + eh_frame_offset - ctx.nxo.getRodataOffset();
         shdr.sh_size = frame_size;
         shdr.sh_link = 0;
         shdr.sh_info = 0;
@@ -1286,14 +1286,14 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
 
     // .gcc_except_table
     if (lsda_range) {
-        if (!ctx.nso.isInRodata(lsda_range->start, lsda_range->size)) {
+        if (!ctx.nxo.isInRodata(lsda_range->start, lsda_range->size)) {
             Panic(".gcc_except_table must be .rodata");
         }
 
         auto& shdr = addSection(SHT_PROGBITS, SectionType_GCC_EXCEPT_TABLE);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = lsda_range->start;
-        shdr.sh_offset = start_offset + lsda_range->start - ctx.nso.getRodataOffset();
+        shdr.sh_offset = start_offset + lsda_range->start - ctx.nxo.getRodataOffset();
         shdr.sh_size = lsda_range->size;
         shdr.sh_link = 0;
         shdr.sh_info = 0;
@@ -1304,13 +1304,13 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
     // RO
     bool unofficial_ro_layout;
     const auto ro_end = lsda_range ? lsda_range->start : eh_frame_hdr_start;
-    if (max_offset < ro_end && ctx.nso.isInRodata(max_offset)) {
+    if (max_offset < ro_end && ctx.nxo.isInRodata(max_offset)) {
         const auto ro_size = ro_end - max_offset;
         
         auto& shdr = addSection(SHT_PROGBITS, SectionType_RO);
         shdr.sh_flags = SHF_ALLOC | SHF_MERGE | SHF_STRINGS;
         shdr.sh_addr = max_offset;
-        shdr.sh_offset = start_offset + max_offset - ctx.nso.getRodataOffset();
+        shdr.sh_offset = start_offset + max_offset - ctx.nxo.getRodataOffset();
         shdr.sh_size = ro_size;
         shdr.sh_link = 0;
         shdr.sh_info = 0;
@@ -1323,23 +1323,23 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         unofficial_ro_layout = true;
     }
 
-    const auto build_id_range = ctx.nso.findModuleIdRange();
+    const auto build_id_range = ctx.nxo.findModuleIdRange();
     if (!build_id_range) {
         Panic("Failed to find .note.gnu.build-id section");
     }
 
     // .api_info
-    if (build_id_range->size + build_id_range->start < ctx.nso.getRodataOffset() + segment_data.size()) {
+    if (build_id_range->size + build_id_range->start < ctx.nxo.getRodataOffset() + segment_data.size()) {
         const auto start = build_id_range->size + build_id_range->start;
-        const auto size = ctx.nso.getRodataOffset() + segment_data.size() - start;
-        if (!ctx.nso.isInRodata(exception_handling_end, size)) {
+        const auto size = ctx.nxo.getRodataOffset() + segment_data.size() - start;
+        if (!ctx.nxo.isInRodata(exception_handling_end, size)) {
             Panic(".api_info must be in .rodata");
         }
 
         auto& shdr = addSection(SHT_PROGBITS, SectionType_API_INFO);
         shdr.sh_flags = SHF_ALLOC | SHF_STRINGS;
         shdr.sh_addr = start;
-        shdr.sh_offset = start_offset + start - ctx.nso.getRodataOffset();
+        shdr.sh_offset = start_offset + start - ctx.nxo.getRodataOffset();
         shdr.sh_size = size;
         shdr.sh_link = 0;
         shdr.sh_info = 0;
@@ -1347,14 +1347,14 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         shdr.sh_entsize = 0;
     } else if (exception_handling_end != 0 && exception_handling_end < build_id_range->start) {
         const auto size = build_id_range->start - exception_handling_end;
-        if (!ctx.nso.isInRodata(exception_handling_end, size)) {
+        if (!ctx.nxo.isInRodata(exception_handling_end, size)) {
             Panic(".api_info must be in .rodata");
         }
 
         auto& shdr = addSection(SHT_PROGBITS, SectionType_API_INFO);
         shdr.sh_flags = SHF_ALLOC | SHF_STRINGS;
         shdr.sh_addr = exception_handling_end;
-        shdr.sh_offset = start_offset + exception_handling_end - ctx.nso.getRodataOffset();
+        shdr.sh_offset = start_offset + exception_handling_end - ctx.nxo.getRodataOffset();
         shdr.sh_size = size;
         shdr.sh_link = 0;
         shdr.sh_info = 0;
@@ -1363,11 +1363,11 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
     }
 
     // .note.gnu.build-id
-    if (ctx.nso.isInRodata(build_id_range->start, build_id_range->size)) {
+    if (ctx.nxo.isInRodata(build_id_range->start, build_id_range->size)) {
         auto& shdr = addSection(SHT_NOTE, SectionType_GNU_BUILDID);
         shdr.sh_flags = SHF_ALLOC;
         shdr.sh_addr = build_id_range->start;
-        shdr.sh_offset = start_offset + build_id_range->start - ctx.nso.getRodataOffset();
+        shdr.sh_offset = start_offset + build_id_range->start - ctx.nxo.getRodataOffset();
         shdr.sh_size = build_id_range->size;
         shdr.sh_link = 0;
         shdr.sh_info = 0;
@@ -1382,7 +1382,7 @@ auto ELFBuilder::splitRodata(Context& ctx) -> void {
         // TODO: how do we fill out RO for these NSOs? (we could just leave it out)
         // auto& shdr = addSection(SHT_PROGBITS, SectionType_RO);
         // shdr.sh_flags = SHF_ALLOC | SHF_MERGE | SHF_STRINGS;
-        // shdr.sh_addr = ctx.nso.getRodataOffset();
+        // shdr.sh_addr = ctx.nxo.getRodataOffset();
         // shdr.sh_offset = start_offset;
         // shdr.sh_size = segment_data.size();
         // shdr.sh_link = 0;
@@ -1399,14 +1399,14 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
 
     // .init_array
     if (ctx.init_array && ctx.init_array_size && ctx.init_array_size->d_un.d_val > 0) {
-        if (!ctx.nso.isInData(ctx.init_array->d_un.d_ptr, ctx.init_array_size->d_un.d_val)) {
+        if (!ctx.nxo.isInData(ctx.init_array->d_un.d_ptr, ctx.init_array_size->d_un.d_val)) {
             Panic(".init_array must be in .data");
         }
 
         auto& shdr = addSection(SHT_INIT_ARRAY, SectionType_INIT_ARRAY);
         shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
         shdr.sh_addr = ctx.init_array->d_un.d_ptr;
-        shdr.sh_offset = start_offset + ctx.init_array->d_un.d_ptr - ctx.nso.getDataOffset();
+        shdr.sh_offset = start_offset + ctx.init_array->d_un.d_ptr - ctx.nxo.getDataOffset();
         shdr.sh_size = ctx.init_array_size->d_un.d_val;
         shdr.sh_link = 0;
         shdr.sh_info = 0;
@@ -1419,14 +1419,14 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
 
     // .fini_array
     if (ctx.fini_array && ctx.fini_array_size && ctx.fini_array_size->d_un.d_val > 0) {
-        if (!ctx.nso.isInData(ctx.fini_array->d_un.d_ptr, ctx.fini_array_size->d_un.d_val)) {
+        if (!ctx.nxo.isInData(ctx.fini_array->d_un.d_ptr, ctx.fini_array_size->d_un.d_val)) {
             Panic(".fini_array must be in .data");
         }
 
         auto& shdr = addSection(SHT_FINI_ARRAY, SectionType_FINI_ARRAY);
         shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
         shdr.sh_addr = ctx.fini_array->d_un.d_ptr;
-        shdr.sh_offset = start_offset + ctx.fini_array->d_un.d_ptr - ctx.nso.getDataOffset();
+        shdr.sh_offset = start_offset + ctx.fini_array->d_un.d_ptr - ctx.nxo.getDataOffset();
         shdr.sh_size = ctx.fini_array_size->d_un.d_val;
         shdr.sh_link = 0;
         shdr.sh_info = 0;
@@ -1440,15 +1440,15 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
     Range dynamic_range{};
 
     // .dynamic
-    if (const auto dyn_range = ctx.nso.findDynamicRange()) {
-        if (!ctx.nso.isInData(dyn_range->start, dyn_range->size)) {
+    if (const auto dyn_range = ctx.nxo.findDynamicRange()) {
+        if (!ctx.nxo.isInData(dyn_range->start, dyn_range->size)) {
             Panic(".dynamic must be in .data");
         }
 
         auto& shdr = addSection(SHT_DYNAMIC, SectionType_DYNAMIC);
         shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
         shdr.sh_addr = dyn_range->start;
-        shdr.sh_offset = start_offset + dyn_range->start - ctx.nso.getDataOffset();
+        shdr.sh_offset = start_offset + dyn_range->start - ctx.nxo.getDataOffset();
         shdr.sh_size = dyn_range->size;
         shdr.sh_link = ctx.dyn_str_index;
         shdr.sh_info = 0;
@@ -1469,7 +1469,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
         }
 
         const auto size = ctx.max_plt_reloc - ctx.got_plt->d_un.d_ptr;
-        if (!ctx.nso.isInData(ctx.got_plt->d_un.d_ptr, size)) {
+        if (!ctx.nxo.isInData(ctx.got_plt->d_un.d_ptr, size)) {
             Panic(".got.plt must be in .data");
         }
 
@@ -1477,7 +1477,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
         auto& shdr = addSection(SHT_PROGBITS, SectionType_GOT_PLT);
         shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
         shdr.sh_addr = ctx.got_plt->d_un.d_ptr;
-        shdr.sh_offset = start_offset + ctx.got_plt->d_un.d_ptr - ctx.nso.getDataOffset();
+        shdr.sh_offset = start_offset + ctx.got_plt->d_un.d_ptr - ctx.nxo.getDataOffset();
         shdr.sh_size = size;
         shdr.sh_link = 0;
         shdr.sh_info = 0;
@@ -1502,14 +1502,14 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
         }
 
         const auto size = ctx.libnx_extension->got_end - ctx.libnx_extension->got_start;
-        if (!ctx.nso.isInData(ctx.libnx_extension->got_start, size)) {
+        if (!ctx.nxo.isInData(ctx.libnx_extension->got_start, size)) {
             Panic(".got must be in .data");
         }
 
         auto& shdr = addSection(SHT_PROGBITS, SectionType_GOT);
         shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
         shdr.sh_addr = ctx.libnx_extension->got_start;
-        shdr.sh_offset = start_offset + ctx.libnx_extension->got_start - ctx.nso.getDataOffset();
+        shdr.sh_offset = start_offset + ctx.libnx_extension->got_start - ctx.nxo.getDataOffset();
         shdr.sh_size = size;
         shdr.sh_link = 0;
         shdr.sh_info = 0;
@@ -1522,20 +1522,20 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
         const auto got_start = ctx.got_plt ? got_plt_range.start + got_plt_range.size : dynamic_range.start + dynamic_range.size;
         auto got_end = got_start;
 
-        if (ctx.nso.isInData(got_end, sizeof(void*))) {
-            const auto value = *reinterpret_cast<const std::uint64_t*>(ctx.nso.getData().data() + got_end - ctx.nso.getDataOffset());
+        if (ctx.nxo.isInData(got_end, sizeof(void*))) {
+            const auto value = *reinterpret_cast<const std::uint64_t*>(ctx.nxo.getData().data() + got_end - ctx.nxo.getDataOffset());
             if (value == dynamic_range.start) {
                 got_end += sizeof(void*); 
             }
         }
 
         if (ctx.init_array && ctx.init_array_size) {
-            while (ctx.relocations.contains(got_end) && got_end < ia_range.start && ctx.nso.isInData(got_end)) {
+            while (ctx.relocations.contains(got_end) && got_end < ia_range.start && ctx.nxo.isInData(got_end)) {
                 got_end += sizeof(void*);
             }
         } else {
             // FIXME: if there is no .init_array, this will run into .atexit
-            while (ctx.relocations.contains(got_end) && ctx.nso.isInData(got_end)) {
+            while (ctx.relocations.contains(got_end) && ctx.nxo.isInData(got_end)) {
                 got_end += sizeof(void*);
             }
         }
@@ -1544,7 +1544,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
             auto& shdr = addSection(SHT_PROGBITS, SectionType_GOT);
             shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
             shdr.sh_addr = got_start;
-            shdr.sh_offset = start_offset + got_start - ctx.nso.getDataOffset();
+            shdr.sh_offset = start_offset + got_start - ctx.nxo.getDataOffset();
             shdr.sh_size = got_end - got_start;
             shdr.sh_link = 0;
             shdr.sh_info = 0;
@@ -1569,8 +1569,8 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
         } else {
             got_end = got_start;
 
-            if (ctx.nso.isInData(got_end, sizeof(void*))) {
-                const auto value = *reinterpret_cast<const std::uint64_t*>(ctx.nso.getData().data() + got_end - ctx.nso.getDataOffset());
+            if (ctx.nxo.isInData(got_end, sizeof(void*))) {
+                const auto value = *reinterpret_cast<const std::uint64_t*>(ctx.nxo.getData().data() + got_end - ctx.nxo.getDataOffset());
                 if (value == dynamic_range.start) {
                     got_end += sizeof(void*); 
                 }
@@ -1578,7 +1578,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
 
             // search until we reach the end of valid relocations
             // this should be fine since newer versions no longer have .atexit afaict
-            while (ctx.relocations.contains(got_end) && ctx.nso.isInData(got_end)) {
+            while (ctx.relocations.contains(got_end) && ctx.nxo.isInData(got_end)) {
                 got_end += sizeof(void*);
             }
         }
@@ -1587,7 +1587,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
             auto& shdr = addSection(SHT_PROGBITS, SectionType_GOT);
             shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
             shdr.sh_addr = got_start;
-            shdr.sh_offset = start_offset + got_start - ctx.nso.getDataOffset();
+            shdr.sh_offset = start_offset + got_start - ctx.nxo.getDataOffset();
             shdr.sh_size = got_end - got_start;
             shdr.sh_link = 0;
             shdr.sh_info = 0;
@@ -1625,7 +1625,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
             auto& shdr = addSection(SHT_PROGBITS, SectionType_ATEXIT);
             shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
             shdr.sh_addr = min_reloc;
-            shdr.sh_offset = start_offset + min_reloc - ctx.nso.getDataOffset();
+            shdr.sh_offset = start_offset + min_reloc - ctx.nxo.getDataOffset();
             shdr.sh_size = max_reloc - min_reloc;
             shdr.sh_link = 0;
             shdr.sh_info = 0;
@@ -1669,7 +1669,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
             auto& shdr = addSection(SHT_PROGBITS, SectionType_DATA_REL_RO);
             shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
             shdr.sh_addr = min_reloc;
-            shdr.sh_offset = start_offset + min_reloc - ctx.nso.getDataOffset();
+            shdr.sh_offset = start_offset + min_reloc - ctx.nxo.getDataOffset();
             shdr.sh_size = max_reloc - min_reloc;
             shdr.sh_link = 0;
             shdr.sh_info = 0;
@@ -1683,18 +1683,18 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
         // RW is the first portion of .data
         auto min_offset = std::numeric_limits<std::size_t>::max();
         for (const auto& shdr : mShdrs) {
-            if (!ctx.nso.isInData(shdr.sh_addr)) {
+            if (!ctx.nxo.isInData(shdr.sh_addr)) {
                 continue;
             }
             min_offset = std::min(shdr.sh_addr, min_offset);
         }
 
-        if (min_offset != std::numeric_limits<std::size_t>::max() && min_offset > ctx.nso.getDataOffset()) {
+        if (min_offset != std::numeric_limits<std::size_t>::max() && min_offset > ctx.nxo.getDataOffset()) {
             auto& shdr = addSection(SHT_PROGBITS, SectionType_RW);
             shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
-            shdr.sh_addr = ctx.nso.getDataOffset();
+            shdr.sh_addr = ctx.nxo.getDataOffset();
             shdr.sh_offset = start_offset;
-            shdr.sh_size = min_offset - ctx.nso.getDataOffset();
+            shdr.sh_size = min_offset - ctx.nxo.getDataOffset();
             shdr.sh_link = 0;
             shdr.sh_info = 0;
             shdr.sh_addralign = 1 << 2;
@@ -1704,7 +1704,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
         // RW is the last portion of .data
         std::size_t max_offset = 0;
         for (const auto& shdr : mShdrs) {
-            if (!ctx.nso.isInData(shdr.sh_addr, shdr.sh_size)) {
+            if (!ctx.nxo.isInData(shdr.sh_addr, shdr.sh_size)) {
                 continue;
             }
             max_offset = std::max(shdr.sh_addr + shdr.sh_size, max_offset);
@@ -1714,7 +1714,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
 
         // .rocrt.align.relroend
         if (rw_start != max_offset) {
-            const auto offset = max_offset - ctx.nso.getDataOffset();
+            const auto offset = max_offset - ctx.nxo.getDataOffset();
             auto& shdr = addSection(SHT_PROGBITS, SectionType_ROCRT_ALIGN_RELROEND);
             shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
             shdr.sh_addr = max_offset;
@@ -1726,13 +1726,13 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
             shdr.sh_entsize = 0;
         }
 
-        if (ctx.nso.isInData(rw_start)) {
-            const auto data_offset = rw_start - ctx.nso.getDataOffset();
+        if (ctx.nxo.isInData(rw_start)) {
+            const auto data_offset = rw_start - ctx.nxo.getDataOffset();
             auto& shdr = addSection(SHT_PROGBITS, SectionType_RW);
             shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
             shdr.sh_addr = rw_start;
             shdr.sh_offset = start_offset + data_offset;
-            shdr.sh_size = ctx.nso.getData().size() - data_offset;
+            shdr.sh_size = ctx.nxo.getData().size() - data_offset;
             shdr.sh_link = 0;
             shdr.sh_info = 0;
             shdr.sh_addralign = 1 << 2;
@@ -1742,7 +1742,7 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
 }
 
 auto ELFBuilder::splitBss(Context& ctx) -> void {
-    const auto totalBssSize = ctx.nso.getBssSize();
+    const auto totalBssSize = ctx.nxo.getBssSize();
     if (totalBssSize > 0) {
         auto trueBssSize = totalBssSize;
         if (ctx.header->bss_end > ctx.header->bss_start) {
@@ -1755,7 +1755,7 @@ auto ELFBuilder::splitBss(Context& ctx) -> void {
         // ZI
         auto& shdr = addSection(SHT_NOBITS, SectionType_ZI);
         shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
-        shdr.sh_addr = ctx.nso.getBssOffset();
+        shdr.sh_addr = ctx.nxo.getBssOffset();
         shdr.sh_offset = mPhdrs[Segment_Data].p_offset + mPhdrs[Segment_Data].p_filesz;
         shdr.sh_size = trueBssSize;
         shdr.sh_link = 0;
@@ -1767,7 +1767,7 @@ auto ELFBuilder::splitBss(Context& ctx) -> void {
         if (trueBssSize < totalBssSize) {
             auto& shdr = addSection(SHT_NOBITS, SectionType_ROCRT_ALIGN_BSSEND);
             shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
-            shdr.sh_addr = ctx.nso.getBssOffset() + trueBssSize;
+            shdr.sh_addr = ctx.nxo.getBssOffset() + trueBssSize;
             shdr.sh_offset = mPhdrs[Segment_Data].p_offset + mPhdrs[Segment_Data].p_filesz + trueBssSize;
             shdr.sh_size = totalBssSize - trueBssSize;
             shdr.sh_link = 0;
@@ -1778,14 +1778,14 @@ auto ELFBuilder::splitBss(Context& ctx) -> void {
     }
 }
 
-auto ELFBuilder::splitSections(const NXOFile& nso) -> void {
+auto ELFBuilder::splitSections(const NXOFile& nxo) -> void {
     auto ctx = Context{
-        .nso = nso
+        .nxo = nxo
     };
 
-    ctx.header = ctx.nso.getModuleHeader(std::addressof(ctx.header_offset));
+    ctx.header = ctx.nxo.getModuleHeader(std::addressof(ctx.header_offset));
 
-    for (const auto& dyn : ctx.nso.getDynamic()) {
+    for (const auto& dyn : ctx.nxo.getDynamic()) {
         switch (dyn.d_tag) {
             case DT_REL: ctx.rel = std::addressof(dyn); break;
             case DT_RELSZ: ctx.rel_size = std::addressof(dyn); break;
@@ -1817,12 +1817,12 @@ auto ELFBuilder::splitSections(const NXOFile& nso) -> void {
     splitBss(ctx);
 }
 
-auto ELFBuilder::build(const NXOFile& nso) -> void {
+auto ELFBuilder::build(const NXOFile& nxo) -> void {
     std::size_t current_file_offset = (sizeof(mHeader) + cProgramAlign - 1) / cProgramAlign * cProgramAlign;
     std::size_t current_virt_offset = 0;
     std::size_t current_phys_offset = 0;
     for (std::uint32_t segment = Segment_Start; segment < Segment_Count; ++segment) {
-        const auto& segment_data = nso.getSegment(segment);
+        const auto& segment_data = nxo.getSegment(segment);
         auto& phdr = mPhdrs[segment];
         phdr.p_type = PT_LOAD;
         phdr.p_offset = current_file_offset;
@@ -1833,7 +1833,7 @@ auto ELFBuilder::build(const NXOFile& nso) -> void {
         phdr.p_align = cProgramAlign;
         switch (segment) {
             case Segment_Text:
-                if (nso.isFlagSet(NXOFile::ExecuteOnlyMemory)) {
+                if (nxo.isFlagSet(NXOFile::ExecuteOnlyMemory)) {
                     phdr.p_flags = PF_X;
                 } else {
                     phdr.p_flags = PF_R | PF_X;
@@ -1844,7 +1844,7 @@ auto ELFBuilder::build(const NXOFile& nso) -> void {
                 break;
             case Segment_Data:
                 phdr.p_flags = PF_R | PF_W;
-                phdr.p_memsz += nso.getBssSize();
+                phdr.p_memsz += nxo.getBssSize();
                 break;
         }
 
@@ -1854,25 +1854,25 @@ auto ELFBuilder::build(const NXOFile& nso) -> void {
         current_phys_offset += (phdr.p_memsz + cSegmentAlignment - 1) / cSegmentAlignment * cSegmentAlignment;
     }
 
-    const auto dynamic = nso.findDynamicRange();
+    const auto dynamic = nxo.findDynamicRange();
     if (!dynamic) {
         Panic("Failed to find .dynamic");
     }
 
-    if (!nso.isInData(dynamic->start, dynamic->size)) {
+    if (!nxo.isInData(dynamic->start, dynamic->size)) {
         Panic(".dynamic must be in .data");
     }
 
     mPhdrs[cDynamicIndex].p_type = PT_DYNAMIC;
     mPhdrs[cDynamicIndex].p_flags = PF_R | PF_W;
-    mPhdrs[cDynamicIndex].p_offset = mPhdrs[Segment_Data].p_offset + dynamic->start - nso.getDataOffset();
+    mPhdrs[cDynamicIndex].p_offset = mPhdrs[Segment_Data].p_offset + dynamic->start - nxo.getDataOffset();
     mPhdrs[cDynamicIndex].p_vaddr = dynamic->start;
     mPhdrs[cDynamicIndex].p_paddr = dynamic->start;
     mPhdrs[cDynamicIndex].p_filesz = dynamic->size;
     mPhdrs[cDynamicIndex].p_memsz = dynamic->size;
     mPhdrs[cDynamicIndex].p_align = cDynamicAlign;
 
-    splitSections(nso);
+    splitSections(nxo);
 
     std::size_t shdr_offset = sizeof(mHeader) + sizeof(Elf64_Phdr) * mPhdrs.size();
     for (const auto& bits : mProgBits) {
