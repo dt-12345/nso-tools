@@ -589,11 +589,16 @@ static auto ReadEhFrame(
             }
             
             has_lsda = false; lsda_encoding = DW_EH_PE_omit; ptr_encoding = DW_EH_PE_omit;
-            if (aug_str.starts_with('z')) {
-                auto current_offset = aug_str_offset;
-                if (aug_str.find("eh") != std::string::npos) { // skip EH data
-                    current_offset += 8;
-                }
+
+            std::size_t aug_str_index = 0;
+            auto current_offset = aug_str_offset;
+
+            if (aug_str.starts_with("eh")) { // skip EH data
+                current_offset += 8;
+                aug_str_index += 2;
+            }
+
+            if (aug_str.substr(aug_str_index).starts_with('z')) {
                 current_offset += GetLEB128Size(std::span(data).subspan(current_offset - nso.getRodataOffset())); // code alignment factor
                 current_offset += GetLEB128Size(std::span(data).subspan(current_offset - nso.getRodataOffset())); // data alignment factor
                 current_offset += sizeof(std::uint8_t); // return address register
@@ -606,7 +611,7 @@ static auto ReadEhFrame(
                 }
 
                 std::size_t aug_data_offset = 0;
-                for (const auto c : aug_str.substr(1)) {
+                for (const auto c : aug_str.substr(aug_str_index + 1)) {
                     switch (c) {
                         case 'P': {
                             if (aug_data_offset + sizeof(Encoding) > aug_size) {
@@ -638,8 +643,14 @@ static auto ReadEhFrame(
                             aug_data_offset += sizeof(Encoding);
                             break;
                         }
+                        case 'S': // signal handler frame
+                        // https://github.com/ARM-software/abi-aa/blob/main/aadwarf64/aadwarf64.rst#common-information-entries
+                        case 'B': // aarch64 pointer auth with key B (key A if not present)
+                        case 'G': // aarch64 MTE stack tags
+                        case 'N': // aarch64 non-hint space pointer auth instructions
+                            break;
                         default:
-                            std::cerr << "Unknown CIE augmentation string component: " << c << " (" << aug_str << ")" << "\n";
+                            std::cerr << "Unknown CIE augmentation string component: " << c << " (" << aug_str << ")\n";
                             break;
                     }
                 }
