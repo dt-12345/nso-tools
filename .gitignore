@@ -2,3 +2,8 @@ build/*
 .cache/*
 
 data/*
+
+*.nso
+*.nro
+*.nss
+*.nrs
