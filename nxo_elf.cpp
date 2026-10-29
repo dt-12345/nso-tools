@@ -808,7 +808,7 @@ auto ELFBuilder::splitText(Context& ctx) -> void {
         cPltEntryMasks[ctx.pointer_auth]
     );
     auto& shdr = addSection(SHT_PROGBITS, SectionType_PLT);
-    shdr.sh_flags = SHF_ALLOC | SHF_EXECINSTR | 2 << 0x1c; // not sure what the SHF_MASKPROC flags are here
+    shdr.sh_flags = SHF_ALLOC | SHF_EXECINSTR  | 0x20000000 /* SHF_AARCH64_PURECODE */;
     shdr.sh_addr = ctx.nxo.getTextOffset() + plt_begin;
     shdr.sh_offset = mPhdrs[Segment_Text].p_offset + plt_begin;
     shdr.sh_size = header_pat.size_bytes() + total_entry_size;
