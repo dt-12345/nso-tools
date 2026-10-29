@@ -1015,7 +1015,7 @@ auto NXOFile::setModuleNameFromRodata() -> void {
 
     mName = { reinterpret_cast<const char*>(rodata.data() + rodata_offset + sizeof(NxDebuglink)), nx_debuglink->name_size };
 
-    if (mName.ends_with(".nss")) {
+    if (mName.ends_with(".nss") || mName.ends_with(".nrs")) {
         mName = mName.substr(0, mName.size() - 4);
     }
 
