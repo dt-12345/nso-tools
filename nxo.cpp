@@ -802,74 +802,64 @@ auto NXOFile::findModuleNameRange() const -> std::optional<Range> {
     std::size_t header_offset = 0;
     const auto module_header = getModuleHeader(std::addressof(header_offset));
 
-    if (GetRocrtVersion(getModuleHeaderLocation()) == 0) {
-        const auto& rodata = getRodata();
-
-        if (rodata.size() < sizeof(NxDebuglink)) {
-            return std::nullopt;
-        }
-
-        const auto header = reinterpret_cast<const NxDebuglink*>(rodata.data());
-        if (header->version != 0) {
-            Panic("Invalid .nx_debuglink section");
-        }
-
-        if (rodata.size() < sizeof(NxDebuglink) + header->name_size) {
-            Panic(".nx_debuglink does not fit in .rodata");
-        }
-
-        return std::make_optional<Range>(getRodataOffset(), sizeof(NxDebuglink) + header->name_size);
-    } else {
+    if (GetRocrtVersion(getModuleHeaderLocation()) == 1) {
         const auto start = header_offset + module_header->nx_debuglink_start;
         const auto end = header_offset + module_header->nx_debuglink_end;
-        if (end < start || end - start < sizeof(NxDebuglink)) {
-            Panic("Invalid .nx_debuglink range in module header");
+        if (end > start && end - start >= sizeof(NxDebuglink) && isInRodata(start, end - start)) {
+            return std::make_optional<Range>(start, end - start);
         }
-        if (!isInRodata(start, end - start)) {
-            Panic(".nx_debuglink must be in .rodata");
-        }
-        return std::make_optional<Range>(start, end - start);
     }
+
+    const auto& rodata = getRodata();
+    if (rodata.size() < sizeof(NxDebuglink)) {
+        return std::nullopt;
+    }
+
+    const auto header = reinterpret_cast<const NxDebuglink*>(rodata.data());
+    if (header->version != 0) {
+        Panic("Invalid .nx_debuglink section");
+    }
+
+    if (rodata.size() < sizeof(NxDebuglink) + header->name_size) {
+        Panic(".nx_debuglink does not fit in .rodata");
+    }
+
+    return std::make_optional<Range>(getRodataOffset(), sizeof(NxDebuglink) + header->name_size);
 }
 
 auto NXOFile::findModuleIdRange() const -> std::optional<Range> {
     std::size_t header_offset = 0;
     const auto module_header = getModuleHeader(std::addressof(header_offset));
 
-    if (GetRocrtVersion(getModuleHeaderLocation()) == 0) {
-        const auto& rodata = getRodata();
+    if (GetRocrtVersion(getModuleHeaderLocation()) == 1) {
+        const auto start = header_offset + module_header->gnu_buildid_start;
+        const auto end = header_offset + module_header->gnu_buildid_end;
+        if (end > start && end - start >= sizeof(Elf64_Nhdr) && isInRodata(start, end - start)) {
+            return std::make_optional<Range>(start, end - start);
+        }
+    }
 
-        std::size_t current_offset = (rodata.size() > 0x2000 ? rodata.size() - 0x2000 : 0) / alignof(Elf64_Nhdr) * alignof(Elf64_Nhdr);
+    const auto& rodata = getRodata();
+    std::size_t current_offset = (rodata.size() > 0x2000 ? rodata.size() - 0x2000 : 0) / alignof(Elf64_Nhdr) * alignof(Elf64_Nhdr);
 
-        while (current_offset + sizeof(cGNUNoteMagic) < rodata.size()) {
-            if (std::memcmp(rodata.data() + current_offset, cGNUNoteMagic, sizeof(cGNUNoteMagic)) == 0) {
-                if (current_offset >= sizeof(Elf64_Nhdr)) {
-                    const auto note_header = reinterpret_cast<const Elf64_Nhdr*>(rodata.data() + current_offset - sizeof(Elf64_Nhdr));
-                    if (note_header->n_namesz == 4 && (note_header->n_type == 3 || note_header->n_type == 4) && note_header->n_descsz <= sizeof(ModuleId)) {
-                        if (current_offset + note_header->n_namesz + note_header->n_descsz <= rodata.size()) {
-                            return std::make_optional<Range>(
-                                getRodataOffset() + current_offset - sizeof(Elf64_Nhdr),
-                                sizeof(Elf64_Nhdr) + note_header->n_namesz + note_header->n_descsz
-                            );
-                        }
+    while (current_offset + sizeof(cGNUNoteMagic) < rodata.size()) {
+        if (std::memcmp(rodata.data() + current_offset, cGNUNoteMagic, sizeof(cGNUNoteMagic)) == 0) {
+            if (current_offset >= sizeof(Elf64_Nhdr)) {
+                const auto note_header = reinterpret_cast<const Elf64_Nhdr*>(rodata.data() + current_offset - sizeof(Elf64_Nhdr));
+                if (note_header->n_namesz == 4 && (note_header->n_type == 3 || note_header->n_type == 4) && note_header->n_descsz <= sizeof(ModuleId)) {
+                    if (current_offset + note_header->n_namesz + note_header->n_descsz <= rodata.size()) {
+                        return std::make_optional<Range>(
+                            getRodataOffset() + current_offset - sizeof(Elf64_Nhdr),
+                            sizeof(Elf64_Nhdr) + note_header->n_namesz + note_header->n_descsz
+                        );
                     }
                 }
             }
-            current_offset += sizeof(cGNUNoteMagic);
         }
-
-        return std::nullopt;
-    } else {
-        const auto start = header_offset + module_header->gnu_buildid_start;
-        const auto end = header_offset + module_header->gnu_buildid_end;
-        if (end < start || end - start < sizeof(Elf64_Nhdr)) {
-            Panic("Invalid .note.gnu.build-id range in module header", start, " - ", end);
-        }
-        if (!isInRodata(start, end - start)) {
-            Panic(".note.gnu.build-id must be in .rodata");
-        }
-        return std::make_optional<Range>(start, end - start);
+        current_offset += sizeof(cGNUNoteMagic);
     }
+
+    return std::nullopt;
 }
 
 auto NXOFile::findApiInfoRange() const -> std::optional<Range> {
