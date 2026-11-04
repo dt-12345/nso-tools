@@ -8,15 +8,8 @@
 
 #include <cstring>
 #include <fstream>
-#include <iostream>
 #include <span>
 #include <vector>
-
-template <typename... Ts>
-[[noreturn]] static auto Panic(Ts&&... args) -> void {
-    (std::cerr << ... << std::forward<Ts>(args)) << "\n";
-    std::exit(1);
-}
 
 static constexpr char cGNUNoteMagic[] = { 'G', 'N', 'U', '\0' };
 
@@ -593,10 +586,15 @@ auto NXOFile::saveNRO(std::string_view path, const std::optional<ModuleId>& modu
     header->size = getBssOffset();
     std::memcpy(header->module_id.data(), mModuleId.data(), mModuleId.size());
     header->dso_handle_offset = findDsoHandle().value_or(0);
-    if (const auto range = findModuleIdRange()) {
-        header->build_id_offset = range->start - getRodataOffset();
+    if (const auto range = findApiInfoRange()) {
+        if (!isInRodata(range->start, range->size)) {
+            Panic(".api_info must be in .rodata");
+        }
+        header->api_info_offset = range->start - getRodataOffset();
+        header->api_info_size = range->size;
     } else {
-        header->build_id_offset = 0;
+        header->api_info_offset = 0;
+        header->api_info_size = 0;
     }
     header->dyn_str_offset = mDynStr.start != 0 ? mDynStr.start - getRodataOffset() : 0;
     header->dyn_str_size = mDynStr.size;
@@ -865,13 +863,90 @@ auto NXOFile::findModuleIdRange() const -> std::optional<Range> {
         const auto start = header_offset + module_header->gnu_buildid_start;
         const auto end = header_offset + module_header->gnu_buildid_end;
         if (end < start || end - start < sizeof(Elf64_Nhdr)) {
-            Panic("Invalid .note.gnu.build-id range in module header");
+            Panic("Invalid .note.gnu.build-id range in module header", start, " - ", end);
         }
         if (!isInRodata(start, end - start)) {
             Panic(".note.gnu.build-id must be in .rodata");
         }
         return std::make_optional<Range>(start, end - start);
     }
+}
+
+auto NXOFile::findApiInfoRange() const -> std::optional<Range> {
+    const auto build_id_range = findModuleIdRange();
+    if (!build_id_range) {
+        return std::nullopt;
+    }
+
+    if (build_id_range->size + build_id_range->start < getRodataOffset() + getRodata().size()) {
+        const auto api_info_offset = build_id_range->start + build_id_range->size - getRodataOffset();
+        const auto first_char = *reinterpret_cast<const char*>(getRodata().data() + api_info_offset);
+        if (first_char != '\0') {
+            return std::make_optional<Range>(build_id_range->start + build_id_range->size, getRodata().size() - api_info_offset);
+        }
+    }
+
+    std::size_t header_offset;
+    const auto header = getModuleHeader(std::addressof(header_offset));
+    std::size_t exception_handling_end = static_cast<std::size_t>(header_offset + header->eh_frame_hdr_end);
+
+    if (const auto eh_frame_offset = findEhFrame()) {
+        const auto eh_frame_size = readEhFrame(*eh_frame_offset, nullptr);
+        exception_handling_end = std::max(*eh_frame_offset + eh_frame_size, exception_handling_end);
+    }
+
+    if (!isInRodata(exception_handling_end)) {
+        Panic(".eh_frame must be in .rodata");
+    }
+
+    if (exception_handling_end < build_id_range->start) {
+        const auto api_info_offset = exception_handling_end - getRodataOffset();
+        const auto first_char = *reinterpret_cast<const char*>(getRodata().data() + api_info_offset);
+        if (first_char != '\0') {
+            return std::make_optional<Range>(exception_handling_end, build_id_range->start - exception_handling_end);
+        }
+    }
+
+    return std::nullopt;
+}
+
+auto NXOFile::findEhFrame() const -> std::optional<std::size_t> {
+    std::size_t header_offset = 0;
+    const auto module_header = getModuleHeader(std::addressof(header_offset));
+    if (module_header->eh_frame_hdr_end <= module_header->eh_frame_hdr_start) {
+        return std::nullopt;
+    }
+
+    const auto eh_frame_hdr_start = header_offset + module_header->eh_frame_hdr_start;
+    const auto eh_frame_hdr_size = module_header->eh_frame_hdr_end - module_header->eh_frame_hdr_start;
+    if (!isInRodata(eh_frame_hdr_start, eh_frame_hdr_size)) {
+        Panic(".eh_frame_hdr must be in .rodata");
+    }
+
+    const auto eh_frame_hdr = reinterpret_cast<const EhFrameHdr*>(getRodata().data() + eh_frame_hdr_start - getRodataOffset());
+    if (eh_frame_hdr->version != 1) {
+        Panic("Invalid .eh_frame_hdr version");
+    }
+
+    std::size_t eh_frame_offset = 0;
+    // extract .eh_frame position
+    if (eh_frame_hdr->eh_frame_ptr_enc != DW_EH_PE_omit) {
+        switch (eh_frame_hdr->eh_frame_ptr_enc & ApplyTypeMask) {
+            case DW_EH_PE_absptr: eh_frame_offset = 0; break;
+            case DW_EH_PE_pcrel: eh_frame_offset = eh_frame_hdr_start + sizeof(EhFrameHdr); break;
+            case DW_EH_PE_datarel: eh_frame_offset = eh_frame_hdr_start; break;
+            default: Panic("Invalid pointer apply type");
+        }
+
+        const auto ptr_enc_data = std::span(getRodata()).subspan(eh_frame_hdr_start - getRodataOffset() + sizeof(EhFrameHdr));
+        if (eh_frame_hdr->eh_frame_ptr_enc & IsSignedMask) {
+            eh_frame_offset = static_cast<std::size_t>(static_cast<std::int64_t>(eh_frame_offset) + ReadSigned(eh_frame_hdr->eh_frame_ptr_enc, ptr_enc_data));
+        } else {
+            eh_frame_offset += ReadUnsigned(eh_frame_hdr->eh_frame_ptr_enc, ptr_enc_data);
+        }
+    }
+
+    return std::make_optional<std::uint32_t>(eh_frame_offset);
 }
 
 auto NXOFile::findDsoHandle() const -> std::optional<std::uint32_t> {
@@ -1059,4 +1134,13 @@ auto NXOFile::setModuleIdFromRodata() -> void {
         reinterpret_cast<const Elf64_Nhdr*>(rodata.data() + rodata_offset + sizeof(Elf64_Nhdr) + note_header->n_namesz),
         note_header->n_descsz
     );
+}
+
+auto NXOFile::isNRO() const -> bool {
+    if (getText().size() < sizeof(NROHeader)) {
+        return false;
+    }
+
+    const auto header = reinterpret_cast<const NROHeader*>(getText().data());
+    return CheckSignature(header->signature, NRO_SIGNATURE);
 }

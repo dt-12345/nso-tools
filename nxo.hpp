@@ -1,13 +1,21 @@
 #include "elf.h"
 
 #include <array>
+#include <climits>
 #include <cstdint>
 #include <cstring>
+#include <iostream>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
+
+template <typename... Ts>
+[[noreturn]] auto Panic(Ts&&... args) -> void {
+    (std::cerr << ... << std::forward<Ts>(args)) << "\n";
+    std::exit(1);
+}
 
 enum SegmentType : std::uint32_t {
     Segment_Text    = 0,
@@ -146,8 +154,8 @@ struct NROHeader {
     ModuleId module_id;
     std::uint32_t dso_handle_offset;
     std::uint32_t reserved1;
-    std::uint32_t build_id_offset;
-    std::uint32_t reserved2;
+    std::uint32_t api_info_offset;
+    std::uint32_t api_info_size;
     std::uint32_t dyn_str_offset;
     std::uint32_t dyn_str_size;
     std::uint32_t dyn_sym_offset;
@@ -329,6 +337,13 @@ public:
     [[nodiscard]] auto findDynStrRange(std::span<const Elf64_Dyn> dynamic) const -> std::optional<Range>;
     [[nodiscard]] auto findModuleNameRange() const -> std::optional<Range>;
     [[nodiscard]] auto findModuleIdRange() const -> std::optional<Range>;
+    [[nodiscard]] auto findApiInfoRange() const -> std::optional<Range>;
+    [[nodiscard]] auto findEhFrame() const -> std::optional<std::size_t>;
+
+    auto readEhFrame(std::size_t eh_frame_start, std::optional<Range>* lsda_range) const -> std::size_t;
+
+    [[nodiscard]] auto isNSO() const -> bool { return !isNRO(); }
+    [[nodiscard]] auto isNRO() const -> bool;
 
 private:
     auto setSegment(std::uint32_t segment, std::span<const std::uint8_t> data) -> NXOFile& {
@@ -400,5 +415,150 @@ inline auto GetRocrtVersion(const ModuleHeaderLocation* rocrt) -> std::uint32_t 
         
         default:
             return 1;
+    }
+}
+
+enum Encoding : std::uint8_t {
+    DW_EH_PE_uleb128    = 0x01,
+    DW_EH_PE_udata2     = 0x02,
+    DW_EH_PE_udata4     = 0x03,
+    DW_EH_PE_udata8     = 0x04,
+    DW_EH_PE_sleb128    = 0x09,
+    DW_EH_PE_sdata2     = 0x0a,
+    DW_EH_PE_sdata4     = 0x0b,
+    DW_EH_PE_sdata8     = 0x0c,
+
+    DW_EH_PE_absptr     = 0x00,
+    DW_EH_PE_pcrel      = 0x10,
+    DW_EH_PE_textrel    = 0x20, // unsupported
+    DW_EH_PE_datarel    = 0x30,
+    DW_EH_PE_funcrel    = 0x40, // unsupported
+    DW_EH_PE_aligned    = 0x50, // unsupported
+
+    DW_EH_PE_indirect   = 0x80,
+
+    DW_EH_PE_omit       = 0xff,
+
+    TypeMask            = 0x0f,
+    SizeMask            = 0x07,
+    IsSignedMask        = 0x08,
+    ApplyTypeMask       = 0xf0,
+};
+
+struct EhFrameHdr {
+    std::uint8_t version;
+    Encoding eh_frame_ptr_enc;
+    Encoding fde_count_enc;
+    Encoding table_enc;
+};
+
+inline auto GetLEB128Size(std::span<const std::uint8_t> data) -> std::size_t {
+    std::size_t offset = 0;
+    std::uint8_t byte;
+    do {
+        if (offset + sizeof(std::uint8_t) > data.size()) {
+            Panic("ReadLEB128 ran out of input");
+        }
+
+        byte = data[offset++];
+    } while ((byte & 0x80) != 0);
+
+    return offset;
+}
+
+inline auto GetSize(Encoding enc, std::span<const std::uint8_t> data) -> std::size_t {
+    if (enc == DW_EH_PE_omit) {
+        return 0;
+    }
+
+    switch (enc & SizeMask) {
+        case 1:
+            return GetLEB128Size(data);
+        case 2:
+            return 2;
+        case 3:
+            return 4;
+        case 4:
+            return 8;
+        default:
+            Panic("Invalid encoding");
+    }
+}
+
+template <bool SIGNED>
+auto ReadLEB128(std::span<const std::uint8_t> data) -> decltype(auto) {
+    using ResultT = std::conditional_t<SIGNED, std::int64_t, std::uint64_t>;
+    
+    ResultT result = 0;
+    std::size_t shift = 0;
+
+    std::size_t offset = 0;
+    std::uint8_t byte;
+    do {
+        if (offset + sizeof(std::uint8_t) > data.size()) {
+            Panic("ReadLEB128 ran out of input");
+        }
+
+        byte = data[offset++];
+        result |= (byte & 0x7f) << shift;
+        shift += 7;
+    } while ((byte & 0x80) != 0);
+
+    if constexpr (SIGNED) {
+        // sign extend
+        constexpr auto nbits = sizeof(ResultT) * CHAR_BIT;
+        if ((shift < nbits) && ((byte & 0x40) != 0)) {
+            result = (result << (nbits - shift)) >> (nbits - shift);
+        }
+    }
+
+    return result;
+}
+
+inline auto ReadSigned(Encoding enc, std::span<const std::uint8_t> data) -> std::int64_t {
+    switch (enc & TypeMask) {
+        case DW_EH_PE_sleb128:
+            return ReadLEB128<true>(data);
+        case DW_EH_PE_sdata2:
+            if (sizeof(std::int16_t) > data.size()) {
+                Panic("ReadSigned ran out of input");
+            }
+            return static_cast<std::int64_t>(*reinterpret_cast<const std::int16_t*>(data.data()));
+        case DW_EH_PE_sdata4:
+            if (sizeof(std::int32_t) > data.size()) {
+                Panic("ReadSigned ran out of input");
+            }
+            return static_cast<std::int64_t>(*reinterpret_cast<const std::int32_t*>(data.data()));
+        case DW_EH_PE_sdata8:
+            if (sizeof(std::int64_t) > data.size()) {
+                Panic("ReadSigned ran out of input");
+            }
+            return *reinterpret_cast<const std::int64_t*>(data.data());
+        default:
+            Panic("Invalid encoding type");
+    }
+}
+
+inline auto ReadUnsigned(Encoding enc, std::span<const std::uint8_t> data) -> std::uint64_t {
+    switch (enc & TypeMask) {
+        case DW_EH_PE_sleb128:
+            return ReadLEB128<false>(data);
+        case DW_EH_PE_sdata2:
+            if (sizeof(std::uint16_t) > data.size()) {
+                Panic("ReadSigned ran out of input");
+            }
+            return static_cast<std::uint64_t>(*reinterpret_cast<const std::uint16_t*>(data.data()));
+        case DW_EH_PE_sdata4:
+            if (sizeof(std::uint32_t) > data.size()) {
+                Panic("ReadSigned ran out of input");
+            }
+            return static_cast<std::uint64_t>(*reinterpret_cast<const std::uint32_t*>(data.data()));
+        case DW_EH_PE_sdata8:
+            if (sizeof(std::uint64_t) > data.size()) {
+                Panic("ReadSigned ran out of input");
+            }
+            return *reinterpret_cast<const std::uint64_t*>(data.data());
+        default:
+            Panic("Invalid encoding type");
     }
 }
