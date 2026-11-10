@@ -187,14 +187,14 @@ auto NXOFile::loadNSO(std::string_view path, bool skip_validation) -> NXOFile& {
 
     const auto dynamic = getDynamic();
     if (header->dyn_str_size == 0) {
-        mDynStr = findDynStrRange(dynamic).value_or({});
+        mDynStr = findDynStrRange(dynamic).value_or(Range{});
     } else {
         mDynStr.start = header->dyn_str_offset + getRodataOffset();
         mDynStr.size = header->dyn_str_size;
     }
 
     if (header->dyn_sym_size == 0) {
-        mDynSym = findDynSymRange(dynamic).value_or({});
+        mDynSym = findDynSymRange(dynamic).value_or(Range{});
     } else {
         mDynSym.start = header->dyn_sym_offset + getRodataOffset();
         mDynSym.size = header->dyn_sym_size;
@@ -242,14 +242,14 @@ auto NXOFile::loadNRO(std::string_view path) -> NXOFile& {
 
     const auto dynamic = getDynamic();
     if (header->dyn_str_size == 0) {
-        mDynStr = findDynStrRange(dynamic).value_or({});
+        mDynStr = findDynStrRange(dynamic).value_or(Range{});
     } else {
         mDynStr.start = header->dyn_str_offset + getRodataOffset();
         mDynStr.size = header->dyn_str_size;
     }
 
     if (header->dyn_sym_size == 0) {
-        mDynSym = findDynSymRange(dynamic).value_or({});
+        mDynSym = findDynSymRange(dynamic).value_or(Range{});
     } else {
         mDynSym.start = header->dyn_sym_offset + getRodataOffset();
         mDynSym.size = header->dyn_sym_size;
