@@ -1587,12 +1587,21 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
         }
 
         if (ctx.nxo.isInData(rw_start)) {
-            const auto data_offset = rw_start - ctx.nxo.getDataOffset();
+            // in NSOs, the RW segment is not aligned up to 0x1000 bytes
+            // in NROs, the RW segment is aligned up to 0x1000 bytes
+            // in both, .bss begins at the end of the unaligned RW segment
+            // we need to verify that claimed .bss start does not extend into RW or other data
+            const auto bss_offset = ctx.header_offset + ctx.header->bss_start;
+            if (bss_offset < rw_start) {
+                Panic(".bss begins before the start of RW");
+            }
+
+            const auto data_end = std::min(bss_offset, ctx.nxo.getBssOffset());
             auto& shdr = addSection(SHT_PROGBITS, SectionType_RW);
             shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
             shdr.sh_addr = rw_start;
-            shdr.sh_offset = start_offset + data_offset;
-            shdr.sh_size = ctx.nxo.getData().size() - data_offset;
+            shdr.sh_offset = start_offset + rw_start - ctx.nxo.getDataOffset();
+            shdr.sh_size = data_end - rw_start;
             shdr.sh_link = 0;
             shdr.sh_info = 0;
             shdr.sh_addralign = 1 << 2;
@@ -1602,8 +1611,9 @@ auto ELFBuilder::splitData(Context& ctx) -> void {
 }
 
 auto ELFBuilder::splitBss(Context& ctx) -> void {
-    const auto totalBssSize = (ctx.nxo.getBssSize() + cSegmentAlignment - 1) / cSegmentAlignment * cSegmentAlignment;
-    if (totalBssSize > 0) {
+    if (ctx.nxo.getBssSize() > 0) {
+        const auto bss_offset = ctx.header_offset + ctx.header->bss_start;
+        const auto totalBssSize = (bss_offset + ctx.nxo.getBssSize() + cSegmentAlignment - 1) / cSegmentAlignment * cSegmentAlignment - bss_offset;
         auto trueBssSize = ctx.nxo.getBssSize();
         if (ctx.header->bss_end > ctx.header->bss_start) {
             trueBssSize = static_cast<std::size_t>(ctx.header->bss_end - ctx.header->bss_start);
@@ -1615,7 +1625,7 @@ auto ELFBuilder::splitBss(Context& ctx) -> void {
         // ZI
         auto& shdr = addSection(SHT_NOBITS, SectionType_ZI);
         shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
-        shdr.sh_addr = ctx.nxo.getBssOffset();
+        shdr.sh_addr = bss_offset;
         shdr.sh_offset = mPhdrs[Segment_Data].p_offset + mPhdrs[Segment_Data].p_filesz;
         shdr.sh_size = trueBssSize;
         shdr.sh_link = 0;
@@ -1627,7 +1637,7 @@ auto ELFBuilder::splitBss(Context& ctx) -> void {
         if (trueBssSize < totalBssSize) {
             auto& shdr = addSection(SHT_NOBITS, SectionType_ROCRT_ALIGN_BSSEND);
             shdr.sh_flags = SHF_WRITE | SHF_ALLOC;
-            shdr.sh_addr = ctx.nxo.getBssOffset() + trueBssSize;
+            shdr.sh_addr = bss_offset + trueBssSize;
             shdr.sh_offset = mPhdrs[Segment_Data].p_offset + mPhdrs[Segment_Data].p_filesz + trueBssSize;
             shdr.sh_size = totalBssSize - trueBssSize;
             shdr.sh_link = 0;

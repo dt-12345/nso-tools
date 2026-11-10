@@ -293,7 +293,7 @@ public:
     }
 
     [[nodiscard]] auto getBssOffset() const -> std::size_t {
-        return (getDataOffset() + getData().size() + cSegmentAlignment - 1) / cSegmentAlignment * cSegmentAlignment;
+        return getDataOffset() + getData().size();
     }
 
     [[nodiscard]] auto isInText(std::size_t offset) const -> bool {

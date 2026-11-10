@@ -582,6 +582,8 @@ auto NXOFile::saveNRO(std::string_view path, const std::optional<ModuleId>& modu
     header->ro_size = (getRodata().size() + cSegmentAlignment - 1) / cSegmentAlignment * cSegmentAlignment;
     header->rw_offset = getDataOffset();
     header->rw_size = (getData().size() + cSegmentAlignment - 1) / cSegmentAlignment * cSegmentAlignment;
+    // official NROs align this size up to 0x1000 bytes
+    // however, the start of .bss is *not* necessarily aligned to 0x1000 bytes so appears to be an error
     header->bss_size = (getBssSize() + cSegmentAlignment - 1) / cSegmentAlignment * cSegmentAlignment;
     header->size = getBssOffset();
     std::memcpy(header->module_id.data(), mModuleId.data(), mModuleId.size());
